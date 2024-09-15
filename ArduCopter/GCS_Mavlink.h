@@ -128,4 +128,7 @@ private:
     MAV_RESULT handle_MAV_CMD_DO_WINCH(const mavlink_command_int_t &packet);
 #endif
 
+    void send_navlink_beacon_info();
+    void send_navlink_beacon_proximity();
+    void send_navlink_estimated_pos();
 };

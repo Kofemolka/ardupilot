@@ -349,6 +349,17 @@ bool GCS_Copter::vehicle_initialised() const {
 bool GCS_MAVLINK_Copter::try_send_message(enum ap_message id)
 {
     switch(id) {
+    case MSG_NAVLINK_BEACON_INFO:
+        send_navlink_beacon_info();
+        break;
+
+    case MSG_NAVLINK_BEACON_PROXIMITY:
+        send_navlink_beacon_proximity();
+        break;
+
+    case MSG_NAVLINK_ESTIMATED_POS:
+        send_navlink_estimated_pos();
+        break;
 
     case MSG_TERRAIN:
 #if AP_TERRAIN_AVAILABLE
@@ -1659,3 +1670,54 @@ uint8_t GCS_MAVLINK_Copter::high_latency_wind_direction() const
     return 0;
 }
 #endif // HAL_HIGH_LATENCY2_ENABLED
+
+void GCS_MAVLINK_Copter::send_navlink_beacon_info()
+{
+    static const uint8_t kTunnelPayload[] = { 1 };
+    
+    mavlink_tunnel_t tunnel_msg;
+    tunnel_msg.payload_type = 1;
+    tunnel_msg.target_system = 14;
+    tunnel_msg.target_component = 88;
+    tunnel_msg.payload_length = 1;
+    memcpy(tunnel_msg.payload, kTunnelPayload, tunnel_msg.payload_length);
+
+    mavlink_msg_tunnel_send_struct(
+        chan,
+        &tunnel_msg
+    );
+}
+
+void GCS_MAVLINK_Copter::send_navlink_beacon_proximity()
+{
+    static const uint8_t kTunnelPayload[] = { 2 };
+
+    mavlink_tunnel_t tunnel_msg;
+    tunnel_msg.payload_type = 2;
+    tunnel_msg.target_system = 14;
+    tunnel_msg.target_component = 88;
+    tunnel_msg.payload_length = 1;
+    memcpy(tunnel_msg.payload, kTunnelPayload, tunnel_msg.payload_length);
+
+    mavlink_msg_tunnel_send_struct(
+        chan,
+        &tunnel_msg
+    );
+}
+
+void GCS_MAVLINK_Copter::send_navlink_estimated_pos()
+{
+    static const uint8_t kTunnelPayload[] = { 3 };
+
+     mavlink_tunnel_t tunnel_msg;
+    tunnel_msg.payload_type = 3;
+    tunnel_msg.target_system = 14;
+    tunnel_msg.target_component = 88;
+    tunnel_msg.payload_length = 1;
+    memcpy(tunnel_msg.payload, kTunnelPayload, tunnel_msg.payload_length);
+
+    mavlink_msg_tunnel_send_struct(
+        chan,
+        &tunnel_msg
+    );
+}

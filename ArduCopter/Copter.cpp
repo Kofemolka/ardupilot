@@ -259,7 +259,21 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
 #if HAL_BUTTON_ENABLED
     SCHED_TASK_CLASS(AP_Button,            &copter.button,              update,           5, 100, 168),
 #endif
+
+    SCHED_TASK(navlink_beacon_info,            0.1,    100,  100),
+    SCHED_TASK(navlink_pos,            1,    100,  100),
 };
+
+void Copter::navlink_beacon_info()
+{
+    gcs().send_message(MSG_NAVLINK_BEACON_INFO);
+}
+
+void Copter::navlink_pos()
+{
+    gcs().send_message(MSG_NAVLINK_BEACON_PROXIMITY);
+    gcs().send_message(MSG_NAVLINK_ESTIMATED_POS);
+}
 
 void Copter::get_scheduler_tasks(const AP_Scheduler::Task *&tasks,
                                  uint8_t &task_count,

@@ -100,5 +100,8 @@ enum ap_message : uint8_t {
 #if AP_MAVLINK_MSG_HIGHRES_IMU_ENABLED
     MSG_HIGHRES_IMU,
 #endif
+    MSG_NAVLINK_BEACON_INFO,
+    MSG_NAVLINK_BEACON_PROXIMITY,
+    MSG_NAVLINK_ESTIMATED_POS,
     MSG_LAST // MSG_LAST must be the last entry in this enum
 };
