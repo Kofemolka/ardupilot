@@ -42,6 +42,6 @@
 [submodule "modules/lwip"]
 	path = modules/lwip
 	url = https://github.com/ArduPilot/lwip.git
-[submodule "modules/cbor"]
-	path = modules/cbor
-	url = https://github.com/libmcu/cbor.git
+[submodule "modules/navmsg"]
+	path = modules/navmsg
+	url = https://github.com/Kofemolka/navmsg.git
