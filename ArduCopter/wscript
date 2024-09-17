@@ -44,7 +44,8 @@ def build(bld):
 
     src += bld.path.parent.ant_glob(
         [
-            'modules/cbor/src/*.c'
+            'modules/navmsg/src/*.cpp',
+            'modules/navmsg/modules/tinycbor/src/cborencoder.c'
         ]
     )
 
@@ -52,12 +53,16 @@ def build(bld):
         program_name='arducopter',
         program_groups=['bin', 'copter'],
         use=vehicle + '_libs',
-        defines=['FRAME_CONFIG=MULTICOPTER_FRAME'],
-        includes=[
-            root_path + '/modules/cbor/include'
+        defines=[
+            'FRAME_CONFIG=MULTICOPTER_FRAME'
         ],
-        source=src
-        )
+        includes=[
+            root_path + '/modules/navmsg/include',
+            root_path + '/modules/navmsg/modules/tinycbor/src'
+        ],
+        source=src,
+        cflags=['-Wno-undef']
+    )
 
     
     bld.ap_program(
