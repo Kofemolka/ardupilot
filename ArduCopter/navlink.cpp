@@ -6,6 +6,10 @@
 
 #include <random>
 
+#include <iostream>
+
+#define log(m) { std::cout << AP_HAL::millis() << ": " << m << std::endl; }
+
 struct beacon_t {
     uint32_t uuid;
     float lat;
@@ -32,8 +36,8 @@ static uint32_t add_noice(uint32_t value, uint32_t time)
     const auto kFlux = 10.0 * 100; // cm
 
     static std::random_device rd;  // Seed for the random number engine
-    std::mt19937 gen(rd()); // Mersenne Twister engine for random numbers
-    std::uniform_real_distribution<> dis(-kJitter, kJitter);
+    static std::mt19937 gen(rd()); // Mersenne Twister engine for random numbers
+    static std::uniform_real_distribution<> dis(-kJitter, kJitter);
     double jitter = dis(gen);
 
     const auto distorted = value + sin(float(time) / 13) * kFlux + jitter;
@@ -80,11 +84,12 @@ void GCS_MAVLINK_Copter::send_navlink_beacon_info()
 
 void GCS_MAVLINK_Copter::send_navlink_beacon_proximity()
 {
-    if(AP::gps().status() < AP_GPS::GPS_OK_FIX_3D) {
+    log("prox begin");
+    if(AP::gps().status(0) < AP_GPS::GPS_OK_FIX_3D) {
         return;
     }
 
-    const auto true_loc = AP::gps().location();
+    const auto true_loc = AP::gps().location(0);
 
     navmsg::beacon_proximity_t proximity(AP_HAL::millis());
 
@@ -103,6 +108,8 @@ void GCS_MAVLINK_Copter::send_navlink_beacon_proximity()
         chan,
         &msg
     );
+
+    log("prox end");
 }
 
 void GCS_MAVLINK_Copter::send_navlink_estimated_pos()
