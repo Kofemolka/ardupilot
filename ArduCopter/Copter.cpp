@@ -261,7 +261,7 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
 #endif
 
     SCHED_TASK(navlink_beacon_info,            0.1,    100,  100),
-    SCHED_TASK(navlink_pos,            1,    100,  100),
+    SCHED_TASK(navlink_pos,            3.3,    100,  100),
 };
 
 void Copter::navlink_beacon_info()
