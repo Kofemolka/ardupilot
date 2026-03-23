@@ -41,6 +41,7 @@ public:
         Pozyx  = 1,
         Marvelmind = 2,
         Nooploop  = 3,
+        Sine   = 4,
 #if AP_BEACON_SITL_ENABLED
         SITL   = 10
 #endif

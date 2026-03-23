@@ -21,6 +21,7 @@
 #include "AP_Beacon_Pozyx.h"
 #include "AP_Beacon_Marvelmind.h"
 #include "AP_Beacon_Nooploop.h"
+#include "AP_Beacon_Sine.h"
 #include "AP_Beacon_SITL.h"
 
 #include <AP_Common/Location.h>
@@ -110,6 +111,9 @@ void AP_Beacon::init(void)
         break;
     case Type::Nooploop:
         _driver = NEW_NOTHROW AP_Beacon_Nooploop(*this);
+        break;
+    case Type::Sine:
+        _driver = NEW_NOTHROW AP_Beacon_Sine(*this);
         break;
 #if AP_BEACON_SITL_ENABLED
     case Type::SITL:
