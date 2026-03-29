@@ -3,6 +3,7 @@
 #if AP_BEACON_SINE_ENABLED
 
 #include <AP_HAL/AP_HAL.h>
+#include <GCS_MAVLink/GCS.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -16,7 +17,15 @@ bool AP_Beacon_Sine::healthy()
 // update the state of the sensor
 void AP_Beacon_Sine::update(void)
 {
+    gcs().send_text(MAV_SEVERITY_INFO, "AP_Beacon_Sine::update");
 
+    set_beacon_position(0, Vector3f(100.0f, 100.0f, 1.0f));
+    set_beacon_distance(0, 50.0f);
+
+    set_beacon_position(1, Vector3f(200.0f, 100.0f, 1.0f));
+    set_beacon_distance(1, 50.0f);
+
+    last_update_ms = AP_HAL::millis();
 }
 
 #endif // AP_BEACON_SINE_ENABLED
