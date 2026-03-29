@@ -22,6 +22,7 @@
 #include <AP_Param/AP_Param.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_Common/Location.h>
+#include <GCS_MAVLink/GCS_MAVLink.h>
 
 class AP_Beacon_Backend;
 
@@ -67,6 +68,9 @@ public:
 
     // update state of all beacons
     void update(void);
+
+    // handle mavlink message
+    void handle_msg(const mavlink_message_t &msg);
 
     // return origin of position estimate system in lat/lon
     bool get_origin(Location &origin_loc) const;

@@ -152,6 +152,14 @@ void AP_Beacon::update(void)
     update_boundary_points();
 }
 
+// handle mavlink message
+void AP_Beacon::handle_msg(const mavlink_message_t &msg)
+{
+    if (_driver != nullptr) {
+        _driver->handle_msg(msg);
+    }
+}
+
 // return origin of position estimate system
 bool AP_Beacon::get_origin(Location &origin_loc) const
 {
