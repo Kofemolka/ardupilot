@@ -4394,14 +4394,17 @@ void GCS_MAVLINK::handle_message(const mavlink_message_t &msg)
 #if AP_MAVLINK_FTP_ENABLED
     case MAVLINK_MSG_ID_FILE_TRANSFER_PROTOCOL:
         GCS_FTP::handle_file_transfer_protocol(msg, chan);
+        break;
+#endif
+
 #if AP_BEACON_ENABLED
+    case MAVLINK_MSG_ID_TUNNEL:
         {
             AP_Beacon *beacon = AP::beacon();
             if (beacon != nullptr) {
                 beacon->handle_msg(msg);
             }
         }
-#endif
         break;
 #endif
 
