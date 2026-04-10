@@ -8,10 +8,23 @@
 
 extern const AP_HAL::HAL &hal;
 
+AP_Beacon_Sine::AP_Beacon_Sine(AP_Beacon &frontend)
+    : AP_Beacon_Backend(frontend) {
+
+  // set invalid distance to unblock EKF beacon fusion logic
+  for (uint8_t i = 0; i < AP_BEACON_MAX_BEACONS; i++) {
+    set_beacon_distance(i, -1.0f);
+  }
+}
+
 // return true if sensor is basically healthy (we are receiving data)
 bool AP_Beacon_Sine::healthy() {
   // healthy if we have parsed a message within the past 300ms
-  return ((AP_HAL::millis() - last_update_ms) < AP_BEACON_TIMEOUT_MS);
+  const auto ok = ((AP_HAL::millis() - last_update_ms) < AP_BEACON_TIMEOUT_MS);
+
+  // gcs().send_text(MAV_SEVERITY_INFO, "[SB] %s", ok ? "OK" : "NO DATA");
+
+  return ok;
 }
 
 // update the state of the sensor
@@ -71,12 +84,12 @@ void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload,
   beacon_loc.alt = (int32_t)(alt * 100.0f); // metres → cm
   const Vector3f pos_ned = ekf_origin.get_distance_NED(beacon_loc);
 
-  gcs().send_text(MAV_SEVERITY_INFO,
-                  "Beacon %u: lat=%.7f lon=%.7f alt=%.2f range=%.2fm var=%.4f "
-                  "NED=(%.1f,%.1f,%.1f)",
-                  (unsigned)beacon_id, (double)lat, (double)lon, (double)alt,
-                  (double)range_m, (double)variance, (double)pos_ned.x,
-                  (double)pos_ned.y, (double)pos_ned.z);
+  // gcs().send_text(MAV_SEVERITY_INFO,
+  //                 "Beacon %u: lat=%.7f lon=%.7f alt=%.2f range=%.2fm
+  //                 var=%.4f " "NED=(%.1f,%.1f,%.1f)", (unsigned)beacon_id,
+  //                 (double)lat, (double)lon, (double)alt, (double)range_m,
+  //                 (double)variance, (double)pos_ned.x, (double)pos_ned.y,
+  //                 (double)pos_ned.z);
 
   set_beacon_position(beacon_id, pos_ned);
   set_beacon_distance(beacon_id, range_m);
@@ -111,12 +124,13 @@ void AP_Beacon_Sine::handle_pose_msg(const uint8_t *payload,
   vehicle_loc.alt = current_loc.alt;
 
   const Vector3f pos_ned = ekf_origin.get_distance_NED(vehicle_loc);
-  const Vector3f local_ned = ekf_origin.get_distance_NED(current_loc);
+  // const Vector3f local_ned = ekf_origin.get_distance_NED(current_loc);
 
-  gcs().send_text(MAV_SEVERITY_INFO,
-                  "Pose: ext=(%.1f,%.1f) local=(%.1f,%.1f) err=%.2f",
-                  (double)pos_ned.x, (double)pos_ned.y, (double)local_ned.x,
-                  (double)local_ned.y, (double)pos_error);
+  // gcs().send_text(MAV_SEVERITY_INFO,
+  //                 "Pose: ext=(%.1f,%.1f) local=(%.1f,%.1f) err=%.2f",
+  //                 (double)pos_ned.x, (double)pos_ned.y,
+  //                 (double)local_ned.x, (double)local_ned.y,
+  //                 (double)pos_error);
 
   set_vehicle_position(pos_ned, pos_error);
 }

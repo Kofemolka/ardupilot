@@ -2,6 +2,8 @@
 
 set -e
 
+cd ..
+
 source .env/bin/activate
 
 Tools/autotest/sim_vehicle.py -v ArduPlane \

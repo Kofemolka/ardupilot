@@ -7,7 +7,7 @@
 class AP_Beacon_Sine : public AP_Beacon_Backend {
 public:
   // constructor
-  using AP_Beacon_Backend::AP_Beacon_Backend;
+  AP_Beacon_Sine(AP_Beacon &frontend);
 
   // return true if sensor is basically healthy (we are receiving data)
   bool healthy() override;
