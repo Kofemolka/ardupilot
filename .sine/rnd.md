@@ -89,3 +89,58 @@ With 3 beacons at 134 ms cycle → ~7.5 meas/s/beacon → ~3 seconds total befor
 | 100 meas accumulated for centroid init | `alignmentStarted` |
 | 100 more meas for filter convergence | `alignmentCompleted` |
 | Fresh measurement present | `rngBcn.dataToFuse` |
+
+---
+
+## Beacon NED frame is independent from EKF origin
+
+**Files:** `libraries/AP_Beacon/AP_Beacon.h`, `libraries/AP_Beacon/AP_Beacon.cpp`, `libraries/AP_Beacon/AP_Beacon_Backend.h`
+
+### Key finding
+
+The beacon NED origin is **not** the EKF origin. It is defined by three plain `AP_Float`
+parameters on the `AP_Beacon` frontend:
+
+```
+BCN_LATITUDE   → origin_lat
+BCN_LONGITUDE  → origin_lon
+BCN_ALT        → origin_alt
+```
+
+The backend reads them via:
+```cpp
+get_beacon_origin_lat() / get_beacon_origin_lon() / get_beacon_origin_alt()
+```
+
+`AP_Beacon::get_origin()` just converts those floats to a `Location` struct — no EKF
+involvement at all.
+
+### How all vendor drivers use it
+
+None of the real-hardware drivers (Pozyx, Marvelmind, Nooploop) set `origin_lat/lon/alt`
+from code. They only call two backend helpers:
+
+- `set_beacon_position(id, Vector3f NED)` — beacon position in their own NED frame
+- `set_vehicle_position(Vector3f NED, accuracy)` — vehicle position in that same frame
+
+Each driver uses its hardware system's internal map as the NED frame, and relies on the
+user setting `BCN_LATITUDE/LONGITUDE/ALT` to the matching real-world WGS-84 coordinate.
+
+| Driver | NED frame origin |
+|---|---|
+| Pozyx | Pozyx system's map origin |
+| Marvelmind | Hedgehog map origin (ENU → NED converted) |
+| Nooploop | NodeFrame anchor map origin (ENU → NED converted) |
+
+### What the EKF does with the origin
+
+The EKF calls `get_origin()` (via DAL) solely to **seed its own EKF origin** when
+transitioning to `AID_ABSOLUTE` via beacons. After that it works entirely in the beacon
+NED frame.
+
+### Practical rule
+
+Set `BCN_LATITUDE/LONGITUDE/ALT` to any stable WGS-84 point (e.g. SITL home or a
+real-world ground anchor). All beacon and vehicle positions passed via
+`set_beacon_position()` / `set_vehicle_position()` must be NED metres relative to that
+same point. The EKF will align its origin to it and navigate in that frame.
