@@ -4,6 +4,7 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <GCS_MAVLink/GCS.h>
+#include <AP_PipeDash/AP_PipeDash.h>
 
 extern const AP_HAL::HAL &hal;
 
@@ -84,6 +85,18 @@ void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload, uint8_t payload_le
 
     set_beacon_position(beacon_id, Vector3f(x, y, z));
     set_beacon_distance(beacon_id, range_m);
+
+#if AP_PIPEDASH_ENABLED
+    if (auto *dash = AP_PipeDash::get_singleton()) {
+        char key[32];
+        snprintf(key, sizeof(key), "bcn.%u.dist", beacon_id);
+        dash->set(key, range_m);
+        snprintf(key, sizeof(key), "bcn.%u.n", beacon_id);
+        dash->set(key, x);
+        snprintf(key, sizeof(key), "bcn.%u.e", beacon_id);
+        dash->set(key, y);
+    }
+#endif
 }
 
 /*
@@ -102,6 +115,14 @@ void AP_Beacon_Sine::handle_pose_msg(const uint8_t *payload, uint8_t payload_len
 
     // z=0: altitude is handled by the EKF height source (baro/GPS), not beacons
     set_vehicle_position(Vector3f(x, y, 0.0f), pos_error);
+
+#if AP_PIPEDASH_ENABLED
+    if (auto *dash = AP_PipeDash::get_singleton()) {
+        dash->set("bcn.vehicle_n", x);
+        dash->set("bcn.vehicle_e", y);
+        dash->set("bcn.vehicle_err", pos_error);
+    }
+#endif
 }
 
 #endif // AP_BEACON_SINE_ENABLED
