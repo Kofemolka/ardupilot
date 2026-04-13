@@ -7,6 +7,7 @@
 #include <AP_Logger/AP_Logger.h>
 #include <AP_DAL/AP_DAL.h>
 #include <AP_InternalError/AP_InternalError.h>
+#include <AP_PipeDash/AP_PipeDash.h>
 
 #if AP_RANGEFINDER_ENABLED
 /********************************************************
@@ -977,6 +978,14 @@ void NavEKF3_core::readRngBcnData()
 
             // Save data into the buffer to be fused when the fusion time horizon catches up with it
             rngBcn.storedRange.push(rngBcnDataNew);
+
+#if AP_PIPEDASH_ENABLED
+            if (auto *dash = AP_PipeDash::get_singleton()) {
+                char key[32];
+                snprintf(key, sizeof(key), "ekf.rng.%u", index);
+                dash->set(key, (float)rngBcnDataNew.rng);
+            }
+#endif
         }
     }
 
