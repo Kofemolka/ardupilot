@@ -14,6 +14,7 @@ Tools/autotest/sim_vehicle.py -v ArduCopter \
     --add-param-file="$PARAM_FILE" \
     --out=udp:127.0.0.1:14550 \
     --out=udp:127.0.0.1:14551 \
+    --out=udp:127.0.0.1:14552 \
     -l 49.799976,24.354701,250,90 \
     --console
 
