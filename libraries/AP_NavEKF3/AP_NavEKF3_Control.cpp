@@ -3,6 +3,7 @@
 #include "AP_NavEKF3.h"
 #include "AP_NavEKF3_core.h"
 #include <GCS_MAVLink/GCS.h>
+#include <AP_PipeDash/AP_PipeDash.h>
 
 #include "AP_DAL/AP_DAL.h"
 
@@ -465,6 +466,14 @@ void NavEKF3_core::setAidingMode()
                 GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 IMU%u is using range beacons",(unsigned)imu_index);
                 GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 IMU%u initial pos NE = %3.1f,%3.1f (m)",(unsigned)imu_index,(double)rngBcn.receiverPos.x,(double)rngBcn.receiverPos.y);
                 GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 IMU%u initial beacon pos D offset = %3.1f (m)",(unsigned)imu_index,(double)rngBcn.posOffsetNED.z);
+#if AP_PIPEDASH_ENABLED
+                if (auto *dash = AP_PipeDash::get_singleton()) {
+                    dash->set("ekf.aid.pos_n",  (float)stateStruct.position.x);
+                    dash->set("ekf.aid.pos_e",  (float)stateStruct.position.y);
+                    dash->set("ekf.aid.rcv_n",  (float)rngBcn.receiverPos.x);
+                    dash->set("ekf.aid.rcv_e",  (float)rngBcn.receiverPos.y);
+                }
+#endif
 #endif  // EK3_FEATURE_BEACON_FUSION
 #if EK3_FEATURE_EXTERNAL_NAV
             } else if (readyToUseExtNav()) {

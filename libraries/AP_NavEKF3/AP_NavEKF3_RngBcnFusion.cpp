@@ -4,6 +4,7 @@
 #if EK3_FEATURE_BEACON_FUSION
 
 #include <AP_DAL/AP_DAL.h>
+#include <AP_PipeDash/AP_PipeDash.h>
 
 // initialise state:
 void NavEKF3_core::BeaconFusion::InitialiseVariables()
@@ -72,6 +73,16 @@ void NavEKF3_core::SelectRngBcnFusion()
                     rngBcn.originEstInit = true;
                     rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
                     rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
+#if AP_PIPEDASH_ENABLED
+                    if (auto *dash = AP_PipeDash::get_singleton()) {
+                        dash->set("ekf.bof.pos_n",  (float)stateStruct.position.x);
+                        dash->set("ekf.bof.pos_e",  (float)stateStruct.position.y);
+                        dash->set("ekf.bof.rcv_n",  (float)rngBcn.receiverPos.x);
+                        dash->set("ekf.bof.rcv_e",  (float)rngBcn.receiverPos.y);
+                        dash->set("ekf.bof.ofs_n",  (float)rngBcn.posOffsetNED.x);
+                        dash->set("ekf.bof.ofs_e",  (float)rngBcn.posOffsetNED.y);
+                    }
+#endif
                 }
                 // beacons are used as the primary means of position reference
                 FuseRngBcn();

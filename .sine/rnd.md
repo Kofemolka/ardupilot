@@ -144,3 +144,106 @@ Set `BCN_LATITUDE/LONGITUDE/ALT` to any stable WGS-84 point (e.g. SITL home or a
 real-world ground anchor). All beacon and vehicle positions passed via
 `set_beacon_position()` / `set_vehicle_position()` must be NED metres relative to that
 same point. The EKF will align its origin to it and navigate in that frame.
+
+---
+
+## Source-switch teleportation: GPS-origin vs beacon-origin mismatch
+
+**Files:** `AP_NavEKF3_PosVelFusion.cpp:148`, `AP_NavEKF3_Control.cpp:462`,
+`AP_NavEKF3_RngBcnFusion.cpp:71`
+
+### Symptom
+
+On switching EKF source to Beacons (source 3), the vehicle position teleports by a
+large vector, snaps back after a few seconds, then teleports by ~2× the original vector,
+then ~3×, etc.
+
+### Observed values (pipe dashboard)
+
+```
+ekf.aid.pos_n/e  =  19.06,  112.97   ← vehicle in GPS EKF frame at switch moment
+ekf.aid.rcv_n/e  = 301.42,  665.11   ← vehicle in beacon frame (3-state filter)
+ekf.rst.delta_n/e= 282.36,  552.14   ← actual jump applied to EKF state (~618 m)
+ekf.bof.ofs_n/e  =   0.00,    0.00   ← posOffsetNED is zero (correct post-reset)
+```
+
+### Root cause
+
+`ResetPosition(RNGBCN)` in `PosVelFusion.cpp:150` unconditionally writes
+`rngBcn.receiverPos` into `stateStruct.position`. That value is produced by the
+3-state beacon pre-filter and is expressed **in the beacon NED frame** (origin =
+`BCN_LATITUDE/LONGITUDE/ALT`). The main EKF state is expressed **in the GPS NED
+frame** (origin = first GPS fix). When these two origins differ, the reset injects
+a jump equal to the vector between them.
+
+The reconciling `setOriginLLH()` call in `readRngBcnData()` is gated on
+`!validOrigin` — but GPS has already set `validOrigin = true` before the source
+switch, so the beacon origin is **never applied** to the EKF world frame.
+
+### Why it doubles / triples
+
+After the jump the EKF drifts back toward GPS (GPS fusion still active or timeout
+recovery). When `originEstInit` is cleared and the cycle repeats, the beacon
+3-state filter has re-converged to the same beacon-frame position while the EKF
+state has returned to GPS-frame — so the next `ResetPosition` jump is the same
+magnitude or larger depending on filter drift.
+
+### Fix options
+
+1. **Align the origins (parameter fix):** Set `BCN_LATITUDE/LONGITUDE/ALT` to the
+   exact WGS-84 coordinate corresponding to the vehicle's position when the EKF
+   first set its GPS origin (typically the arming/takeoff point). Then both frames
+   share the same origin and the reset delta is ~0.
+
+2. **Re-origin the EKF on source switch (code fix):** In `SelectAidingMode()` at
+   the `readyToUseRangeBeacon()` branch, call `setOriginLLH(beacon->get_origin())`
+   regardless of `validOrigin`. This re-anchors the EKF world frame to the beacon
+   origin before the position reset, so the jump cancels out.
+
+### Why vendor hardware never hits this bug
+
+All three real beacon drivers (Pozyx, Marvelmind, Nooploop) operate in environments
+where **GPS is absent or not the primary source at startup**. Their typical boot sequence:
+
+1. Vehicle powers on indoors / in GPS-denied area.
+2. Beacons accumulate 200 measurements → `alignmentCompleted`.
+3. `readRngBcnData()` calls `setOriginLLH(beacon_origin)` because `!validOrigin` is
+   still true — GPS has not fixed yet.
+4. EKF origin is now anchored to `BCN_LAT/LON/ALT`.
+5. `ResetPosition(RNGBCN)` fires: `stateStruct.position = receiverPos` — **both are
+   already in the same frame**, so the jump is ~0.
+6. `posOffsetNED` initialises to ~0 — correct, no translation needed.
+
+None of the three drivers (Pozyx, Marvelmind, Nooploop) ever read or use
+`BCN_LATITUDE/LONGITUDE/ALT` in code. They pass all positions in their hardware NED
+frame and rely entirely on the user setting those parameters to the matching
+real-world WGS-84 point so that `setOriginLLH` seeds the EKF with the right origin
+during step 3 above.
+
+**The `posOffsetNED` mechanism is designed for a second purpose:** when GPS is the
+primary source (`AID_ABSOLUTE` with GPS) and beacons run in the background via
+`FuseRngBcnStatic()`, a future switch to beacons should be seamless because
+`posOffsetNED` would have captured any residual frame delta. In practice, for
+vendor hardware starting without GPS, this offset is always ~0, so the mechanism
+is never exercised.
+
+### The scenario that breaks (our case)
+
+1. SITL starts with GPS → GPS fixes → `validOrigin = true` → `EKF_origin` = takeoff point.
+2. `setOriginLLH` gate (`!validOrigin`) is now permanently closed.
+3. Beacon 3-state filter runs in background, converges in beacon frame
+   (`BCN_LAT/LON/ALT` origin, **different** from takeoff point).
+4. User switches to source 3.
+5. `ResetPosition(RNGBCN)` writes beacon-frame `receiverPos` into GPS-frame state → **jump**.
+6. `posOffsetNED = receiverPos − stateStruct.position = 0` (frames already collapsed by reset).
+7. Beacon-position correction (line 1035) applies zero → no translation ever happens.
+
+The core is not broken. It just has an untested code path:
+**GPS-first followed by a live switch to beacons** — no vendor hardware does this.
+
+### Verified with
+
+`AP_PipeDash` logging added to:
+- `AP_NavEKF3_PosVelFusion.cpp:148` — logs `ekf.rst.*` (from/to/delta)
+- `AP_NavEKF3_Control.cpp:462` — logs `ekf.aid.*` (state pos + receiverPos at switch)
+- `AP_NavEKF3_RngBcnFusion.cpp:71` — logs `ekf.bof.*` (posOffsetNED on first fusion tick)
