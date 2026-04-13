@@ -4,6 +4,8 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <GCS_MAVLink/GCS.h>
+#include <AP_AHRS/AP_AHRS.h>
+#include <AP_Common/Location.h>
 #include <AP_PipeDash/AP_PipeDash.h>
 
 extern const AP_HAL::HAL &hal;
@@ -60,14 +62,14 @@ void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg)
 }
 
 /*
- * Range message layout (21 bytes):
+ * Range message layout (22 bytes):
  *   [0]      msg_type  uint8   = 0
  *   [1]      id        uint8
- *   [2..5]   x_north   float32  metres in beacon NED frame
- *   [6..9]   y_east    float32  metres in beacon NED frame
- *   [10..13] z_down    float32  metres in beacon NED frame
- *   [14..17] range     float32  metres
- *   [18..21] variance  float32  m²
+ *   [2..5]   lat       int32   degrees × 1e7
+ *   [6..9]   lon       int32   degrees × 1e7
+ *   [10..13] alt       float32 metres AMSL
+ *   [14..17] range     float32 metres
+ *   [18..21] variance  float32 m²
  */
 void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload, uint8_t payload_length)
 {
@@ -76,14 +78,24 @@ void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload, uint8_t payload_le
         return;
     }
 
-    float x, y, z, range_m, variance;
-    memcpy(&x,        payload + 2,  sizeof(x));
-    memcpy(&y,        payload + 6,  sizeof(y));
-    memcpy(&z,        payload + 10, sizeof(z));
+    // Discard until the EKF has an origin to translate against.
+    Location ekf_origin;
+    if (!AP::ahrs().get_origin(ekf_origin)) {
+        return;
+    }
+
+    int32_t lat, lon;
+    float alt_m, range_m, variance;
+    memcpy(&lat,      payload + 2,  sizeof(lat));
+    memcpy(&lon,      payload + 6,  sizeof(lon));
+    memcpy(&alt_m,    payload + 10, sizeof(alt_m));
     memcpy(&range_m,  payload + 14, sizeof(range_m));
     memcpy(&variance, payload + 18, sizeof(variance));
 
-    set_beacon_position(beacon_id, Vector3f(x, y, z));
+    const Location beacon_loc(lat, lon, (int32_t)(alt_m * 100.0f), Location::AltFrame::ABSOLUTE);
+    const Vector3f ned = ekf_origin.get_distance_NED(beacon_loc);
+
+    set_beacon_position(beacon_id, ned);
     set_beacon_distance(beacon_id, range_m);
 
 #if AP_PIPEDASH_ENABLED
@@ -92,9 +104,9 @@ void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload, uint8_t payload_le
         snprintf(key, sizeof(key), "bcn.%u.dist", beacon_id);
         dash->set(key, range_m);
         snprintf(key, sizeof(key), "bcn.%u.n", beacon_id);
-        dash->set(key, x);
+        dash->set(key, ned.x);
         snprintf(key, sizeof(key), "bcn.%u.e", beacon_id);
-        dash->set(key, y);
+        dash->set(key, ned.y);
     }
 #endif
 }
@@ -102,24 +114,34 @@ void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload, uint8_t payload_le
 /*
  * Pose message layout (13 bytes):
  *   [0]    msg_type  uint8   = 1
- *   [1..4] x_north   float32  metres in beacon NED frame
- *   [5..8] y_east    float32  metres in beacon NED frame
+ *   [1..4] lat       int32   degrees × 1e7
+ *   [5..8] lon       int32   degrees × 1e7
  *   [9..12] pos_error float32  metres
  */
 void AP_Beacon_Sine::handle_pose_msg(const uint8_t *payload, uint8_t payload_length)
 {
-    float x, y, pos_error;
-    memcpy(&x,         payload + 1, sizeof(x));
-    memcpy(&y,         payload + 5, sizeof(y));
+    // Discard until the EKF has an origin to translate against.
+    Location ekf_origin;
+    if (!AP::ahrs().get_origin(ekf_origin)) {
+        return;
+    }
+
+    int32_t lat, lon;
+    float pos_error;
+    memcpy(&lat,       payload + 1, sizeof(lat));
+    memcpy(&lon,       payload + 5, sizeof(lon));
     memcpy(&pos_error, payload + 9, sizeof(pos_error));
 
+    const Location vehicle_loc(lat, lon, 0, Location::AltFrame::ABSOLUTE);
+    const Vector3f ned = ekf_origin.get_distance_NED(vehicle_loc);
+
     // z=0: altitude is handled by the EKF height source (baro/GPS), not beacons
-    set_vehicle_position(Vector3f(x, y, 0.0f), pos_error);
+    set_vehicle_position(Vector3f(ned.x, ned.y, 0.0f), pos_error);
 
 #if AP_PIPEDASH_ENABLED
     if (auto *dash = AP_PipeDash::get_singleton()) {
-        dash->set("bcn.vehicle_n", x);
-        dash->set("bcn.vehicle_e", y);
+        dash->set("bcn.vehicle_n", ned.x);
+        dash->set("bcn.vehicle_e", ned.y);
         dash->set("bcn.vehicle_err", pos_error);
     }
 #endif
