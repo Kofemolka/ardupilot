@@ -1,3 +1,4 @@
+## -------------------------------------------
 ## Main
 
 # beacon type = Sine
@@ -20,6 +21,13 @@ EK3_SRC3_POSZ,1
 EK3_SRC3_VELXY,0
 EK3_SRC3_VELZ,0
 EK3_SRC3_YAW,0
+
+
+## -------------------------------------------
+## Tuning
+
+# Beacon measurement noise
+EK3_BCN_M_NSE,10
 
 ## -------------------------------------------
 ## Debug behavior

@@ -95,18 +95,6 @@ void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload,
 
   set_beacon_position(beacon_id, ned);
   set_beacon_distance(beacon_id, range_m);
-
-#if AP_PIPEDASH_ENABLED
-  if (auto *dash = AP_PipeDash::get_singleton()) {
-    char key[32];
-    snprintf(key, sizeof(key), "bcn.%u.dist", beacon_id);
-    dash->set(key, range_m);
-    snprintf(key, sizeof(key), "bcn.%u.n", beacon_id);
-    dash->set(key, ned.x);
-    snprintf(key, sizeof(key), "bcn.%u.e", beacon_id);
-    dash->set(key, ned.y);
-  }
-#endif
 }
 
 /*
@@ -146,15 +134,6 @@ void AP_Beacon_Sine::handle_pose_msg(const uint8_t *payload,
   const Vector3f ned = ekf_origin.get_distance_NED(vehicle_loc);
 
   set_vehicle_position(ned, pos_error);
-
-#if AP_PIPEDASH_ENABLED
-  if (auto *dash = AP_PipeDash::get_singleton()) {
-    dash->set("bcn.vehicle_n", ned.x);
-    dash->set("bcn.vehicle_e", ned.y);
-    dash->set("bcn.vehicle_d", ned.z);
-    dash->set("bcn.vehicle_err", pos_error);
-  }
-#endif
 }
 
 #endif // AP_BEACON_SINE_ENABLED
