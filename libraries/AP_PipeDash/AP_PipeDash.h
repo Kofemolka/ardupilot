@@ -4,8 +4,8 @@
 
 #if AP_PIPEDASH_ENABLED
 
-#include <stdint.h>
 #include <AP_HAL/AP_HAL.h>
+#include <stdint.h>
 #include <stdio.h>
 
 /*
@@ -27,27 +27,29 @@
  */
 class AP_PipeDash {
 public:
-    static AP_PipeDash *get_singleton();
+  static AP_PipeDash *get_singleton();
 
-    // Write key=<float> (4 decimal places)
-    void set(const char *key, float value);
+  // Write key=<float> (4 decimal places)
+  void set(const char *key, float value);
 
-    // Write key=<integer>
-    void set(const char *key, int32_t value);
+  // Write key=<integer>
+  void set(const char *key, int32_t value);
 
-    // Write key=<string>  (value must not contain newlines)
-    void set(const char *key, const char *value);
+  void set(const char *key, bool value);
+
+  // Write key=<string>  (value must not contain newlines)
+  void set(const char *key, const char *value);
 
 private:
-    AP_PipeDash();
-    CLASS_NO_COPY(AP_PipeDash);
+  AP_PipeDash();
+  CLASS_NO_COPY(AP_PipeDash);
 
-    void _ensure_open();
-    void _write(const char *key, const char *value_str);
+  void _ensure_open();
+  void _write(const char *key, const char *value_str);
 
-    int _fd{-1};
+  int _fd{-1};
 
-    static constexpr const char *PIPE_PATH = "/tmp/ardupilot_dash";
+  static constexpr const char *PIPE_PATH = "/tmp/ardupilot_dash";
 };
 
-#endif  // AP_PIPEDASH_ENABLED
+#endif // AP_PIPEDASH_ENABLED
