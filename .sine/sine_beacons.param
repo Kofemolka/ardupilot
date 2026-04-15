@@ -33,5 +33,8 @@ FS_EKF_ACTION,0
 # Don't trigger FS when Deadreckoning starts
 FS_DR_ENABLE,0
 
+# Only 1 core
+EK3_IMU_MASK,1
+
 # TODO
 # FS_EKF_THRESH,0
