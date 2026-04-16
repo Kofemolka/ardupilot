@@ -19,11 +19,11 @@ but **never updates `count`**. The `count()` accessor reads only from `_RBCH.cou
 
 ### Consequence
 
-| Timing | Result |
-|---|---|
-| Backend enabled + `count() > 0` before DAL init | Works correctly |
-| Backend enabled but `count() == 0` at DAL init | DAL allocated, EKF sees 0 beacons forever |
-| Backend not `enabled()` at DAL init | `_beacon` stays `nullptr`, EKF has no beacon DAL at all |
+| Timing                                          | Result                                                  |
+| ----------------------------------------------- | ------------------------------------------------------- |
+| Backend enabled + `count() > 0` before DAL init | Works correctly                                         |
+| Backend enabled but `count() == 0` at DAL init  | DAL allocated, EKF sees 0 beacons forever               |
+| Backend not `enabled()` at DAL init             | `_beacon` stays `nullptr`, EKF has no beacon DAL at all |
 
 ### Rule
 
@@ -78,17 +78,17 @@ With 3 beacons at 134 ms cycle → ~7.5 meas/s/beacon → ~3 seconds total befor
 
 ### Full checklist
 
-| Condition | Where |
-|---|---|
-| `EK3_SRC1_POSXY = 4` | param |
+| Condition                               | Where                         |
+| --------------------------------------- | ----------------------------- |
+| `EK3_SRC1_POSXY = 4`                    | param                         |
 | DAL beacon count > 0 at first EKF frame | `AP_DAL_Beacon` ctor snapshot |
-| Beacon origin received by EKF | `AP_NavEKF3_Measurements` |
-| Tilt aligned | `tiltAlignComplete` |
-| Yaw aligned (compass/GPS) | `yawAlignComplete` |
-| Gyro bias converged | `delAngBiasLearned` |
-| 100 meas accumulated for centroid init | `alignmentStarted` |
-| 100 more meas for filter convergence | `alignmentCompleted` |
-| Fresh measurement present | `rngBcn.dataToFuse` |
+| Beacon origin received by EKF           | `AP_NavEKF3_Measurements`     |
+| Tilt aligned                            | `tiltAlignComplete`           |
+| Yaw aligned (compass/GPS)               | `yawAlignComplete`            |
+| Gyro bias converged                     | `delAngBiasLearned`           |
+| 100 meas accumulated for centroid init  | `alignmentStarted`            |
+| 100 more meas for filter convergence    | `alignmentCompleted`          |
+| Fresh measurement present               | `rngBcn.dataToFuse`           |
 
 ---
 
@@ -126,11 +126,11 @@ from code. They only call two backend helpers:
 Each driver uses its hardware system's internal map as the NED frame, and relies on the
 user setting `BCN_LATITUDE/LONGITUDE/ALT` to the matching real-world WGS-84 coordinate.
 
-| Driver | NED frame origin |
-|---|---|
-| Pozyx | Pozyx system's map origin |
-| Marvelmind | Hedgehog map origin (ENU → NED converted) |
-| Nooploop | NodeFrame anchor map origin (ENU → NED converted) |
+| Driver     | NED frame origin                                  |
+| ---------- | ------------------------------------------------- |
+| Pozyx      | Pozyx system's map origin                         |
+| Marvelmind | Hedgehog map origin (ENU → NED converted)         |
+| Nooploop   | NodeFrame anchor map origin (ENU → NED converted) |
 
 ### What the EKF does with the origin
 
@@ -247,3 +247,139 @@ The core is not broken. It just has an untested code path:
 - `AP_NavEKF3_PosVelFusion.cpp:148` — logs `ekf.rst.*` (from/to/delta)
 - `AP_NavEKF3_Control.cpp:462` — logs `ekf.aid.*` (state pos + receiverPos at switch)
 - `AP_NavEKF3_RngBcnFusion.cpp:71` — logs `ekf.bof.*` (posOffsetNED on first fusion tick)
+
+---
+
+# Origin alignment
+
+Happens only once!
+/home/ayakuba/src/poc/ardupilot/libraries/AP_NavEKF3/AP_NavEKF3_RngBcnFusion.cpp : 78
+```c++
+ if (!rngBcn.originEstInit) {
+          rngBcn.originEstInit = true;
+          rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
+          rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
+```
+
+But `stateStruct.position is reset every second to 0/0 -> moving local origin:
+/home/ayakuba/src/poc/ardupilot/libraries/AP_NavEKF3/AP_NavEKF3_core.cpp : 2726
+```c++
+void NavEKF3_core::moveEKFOrigin(void) {
+
+}
+```
+
+### Investigation result: `posOffsetNED` goes stale after `moveEKFOrigin`
+
+**Files:** `AP_NavEKF3_core.cpp:2726`, `AP_NavEKF3_RngBcnFusion.cpp:78`,
+`AP_NavEKF3_Measurements.cpp:1161`
+
+#### How `posOffsetNED` is used
+
+`readRngBcnData()` bakes the offset into every beacon measurement before fusion:
+
+```cpp
+// Measurements.cpp:1161
+beacon_posNED.x += posOffsetNED.x;   // BCN frame → effective EKF frame
+beacon_posNED.y += posOffsetNED.y;
+```
+
+`FuseRngBcn()` then computes:
+
+```cpp
+rngPred = |stateStruct.position - beacon_posNED_effective|
+```
+
+**Range-correctness invariant** — the predicted range equals the physical range iff:
+
+```
+|stateStruct.position − (beacon_BCN + posOffsetNED)| = |vehicle_BCN − beacon_BCN|
+```
+
+After `ResetPosition(RNGBCN)`, `stateStruct.position = receiverPos = vehicle_BCN`,
+so `posOffsetNED = 0` satisfies the invariant. ✓
+
+#### What `moveEKFOrigin` does to the invariant
+
+```cpp
+// core.cpp:2732-2745
+loc = EKF_origin.offset(position.x, position.y);   // new physical origin
+diffNE = loc.get_distance_NE_ftype(EKF_origin);     // ≈ −position
+EKF_origin = loc;
+stateStruct.position.xy() += diffNE;                // position → ~0
+// posOffsetNED NOT touched  ← bug
+```
+
+After this: `stateStruct.position ≈ 0`, `posOffsetNED` still 0. Substituting:
+
+```
+|0 − (beacon_BCN + 0)| = |beacon_BCN|   ← distance from BCN origin to beacon
+```
+
+Correct range = `|vehicle_BCN − beacon_BCN|`. With vehicle at `(301, 665)` in BCN
+frame and a beacon at `(400, 700)`, the error is:
+
+```
+wrong:   |(400, 700)| ≈ 806 m
+correct: |(301−400, 665−700)| = |(−99, −35)| ≈ 105 m  →  ~700 m error
+```
+
+#### When `moveEKFOrigin` fires during beacon mode
+
+Gate at `core.cpp:2728`:
+
+```cpp
+if (!frontend->common_origin_valid || !filterStatus.flags.using_gps) return;
+```
+
+`using_gps` flag (`Control.cpp:917`):
+
+```cpp
+status.flags.using_gps =
+    ((imuSampleTime_ms - lastGpsPosPassTime_ms) < 4000) &&
+    (PV_AidingMode == AID_ABSOLUTE);
+```
+
+Beacons also use `AID_ABSOLUTE`. So for **up to 4 seconds after the GPS→beacon
+switch**, `using_gps` is true and `moveEKFOrigin` fires every second.
+
+The update-loop ordering in `core.cpp:683-719` makes it land in the same frame:
+
+```
+SelectVelPosFusion()      ← GPS fusion, sets lastGpsPosPassTime_ms
+SelectRngBcnFusion()      ← originEstInit fires, captures posOffsetNED
+updateFilterStatus()      ← using_gps = true (GPS was recent)
+moveEKFOrigin()           ← invalidates posOffsetNED in the same frame
+```
+
+#### Fix
+
+The invariant is preserved when `posOffsetNED` receives the same delta as
+`stateStruct.position`. Algebra: if `position → position + diffNE` must keep
+`|position − (beacon + offset)|` constant, then `offset → offset + diffNE`.
+
+Add to `moveEKFOrigin()` after the position/output-state block:
+
+```cpp
+// core.cpp: after line 2745 (storedOutput loop)
+#if EK3_FEATURE_BEACON_FUSION
+  // Keep beacon frame offset consistent with the origin shift.
+  // When EKF origin moves by diffNE, position drops by diffNE,
+  // so posOffsetNED must compensate by the same amount.
+  if (rngBcn.originEstInit) {
+    rngBcn.posOffsetNED.xy() += diffNE;
+  }
+#endif
+```
+
+Verification with example above:
+- `diffNE ≈ (−301, −665)`, `posOffsetNED_old = 0`
+- `posOffsetNED_new = (−301, −665)`
+- `beacon_effective = (400, 700) + (−301, −665) = (99, 35)`
+- `rngPred = |(0,0) − (99, 35)| = 105 m` ✓
+
+#### Why vendor hardware never hit this
+
+All three real drivers (Pozyx, Marvelmind, Nooploop) start without GPS.
+`using_gps` is always false → `moveEKFOrigin` never fires → `posOffsetNED`
+stays at its initial value of 0. The bug is exclusive to the GPS-first-then-switch path.
