@@ -1096,14 +1096,6 @@ void NavEKF3_core::readRngBcnData() {
       // Save data into the buffer to be fused when the fusion time horizon
       // catches up with it
       rngBcn.storedRange.push(rngBcnDataNew);
-
-#if AP_PIPEDASH_ENABLED
-      if (auto *dash = AP_PipeDash::get_singleton()) {
-        char key[32];
-        snprintf(key, sizeof(key), "ekf.rng.%u", index);
-        dash->set(key, (float)rngBcnDataNew.rng);
-      }
-#endif
     }
   }
 
@@ -1160,13 +1152,10 @@ void NavEKF3_core::readRngBcnData() {
   if (rngBcn.dataToFuse) {
     rngBcn.dataDelayed.beacon_posNED.x += rngBcn.posOffsetNED.x;
     rngBcn.dataDelayed.beacon_posNED.y += rngBcn.posOffsetNED.y;
-#if AP_PIPEDASH_ENABLED
-    if (auto *dash = AP_PipeDash::get_singleton()) {
-      dash->set("rng.off.x", rngBcn.posOffsetNED.x);
-      dash->set("rng.off.y", rngBcn.posOffsetNED.y);
-    }
-#endif
   }
+
+  PIPE("rng.off.x", (float)rngBcn.posOffsetNED.x);
+  PIPE("rng.off.y", (float)rngBcn.posOffsetNED.y);
 }
 #endif // EK3_FEATURE_BEACON_FUSION
 

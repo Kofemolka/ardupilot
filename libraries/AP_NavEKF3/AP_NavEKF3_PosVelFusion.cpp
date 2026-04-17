@@ -157,15 +157,12 @@ void NavEKF3_core::ResetPosition(resetDataSource posResetSource) {
     } else if ((imuSampleTime_ms - rngBcn.last3DmeasTime_ms < 250 &&
                 posResetSource == resetDataSource::DEFAULT) ||
                posResetSource == resetDataSource::RNGBCN) {
-// use the range beacon data as a second preference
-#if AP_PIPEDASH_ENABLED
-      if (auto *dash = AP_PipeDash::get_singleton()) {
-        dash->set("rst.from_n", (float)posResetNE.x);
-        dash->set("rst.from_e", (float)posResetNE.y);
-        dash->set("rst.to_n", (float)rngBcn.receiverPos.x);
-        dash->set("rst.to_e", (float)rngBcn.receiverPos.y);
-      }
-#endif
+      // use the range beacon data as a second preference
+
+      PIPE("reset.to_rng.ts", (int32_t)imuSampleTime_ms);
+      PIPE("reset.to_rng.x", (float)rngBcn.receiverPos.x);
+      PIPE("reset.to_rng.y", (float)rngBcn.receiverPos.y);
+
       stateStruct.position.x = rngBcn.receiverPos.x;
       stateStruct.position.y = rngBcn.receiverPos.y;
       // set the variances from the beacon alignment filter
@@ -197,26 +194,12 @@ void NavEKF3_core::ResetPosition(resetDataSource posResetSource) {
   posResetNE.x = stateStruct.position.x - posResetNE.x;
   posResetNE.y = stateStruct.position.y - posResetNE.y;
 
-  // #if AP_PIPEDASH_ENABLED
-  //     if (auto *dash = AP_PipeDash::get_singleton()) {
-  //         dash->set("ekf.rst.delta_n", (float)posResetNE.x);
-  //         dash->set("ekf.rst.delta_e", (float)posResetNE.y);
-  //     }
-  // #endif
-
   // store the time of the reset
   lastPosReset_ms = imuSampleTime_ms;
 
   // clear the timeout flags and counters
   posTimeout = false;
   lastGpsPosPassTime_ms = imuSampleTime_ms;
-
-#if AP_PIPEDASH_ENABLED
-  if (auto *dash = AP_PipeDash::get_singleton()) {
-    dash->set("res.jump.x", (float)posResetNE.x);
-    dash->set("res.jump.y", (float)posResetNE.y);
-  }
-#endif
 }
 
 #if EK3_FEATURE_POSITION_RESET

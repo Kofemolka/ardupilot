@@ -95,6 +95,10 @@ void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload,
 
   set_beacon_position(beacon_id, ned);
   set_beacon_distance(beacon_id, range_m);
+
+  char key[32];
+  sprintf(key, "sine.rng.%u", beacon_id);
+  PIPE(key, range_m);
 }
 
 /*

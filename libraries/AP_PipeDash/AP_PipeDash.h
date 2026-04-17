@@ -52,4 +52,15 @@ private:
   static constexpr const char *PIPE_PATH = "/tmp/ardupilot_dash";
 };
 
+#define PIPE(key, value)                                                       \
+  do {                                                                         \
+    if (auto *dash = AP_PipeDash::get_singleton()) {                           \
+      dash->set(key, value);                                                   \
+    }                                                                          \
+  } while (0)
+
+#else
+
+#define PIPE(key, value)
+
 #endif // AP_PIPEDASH_ENABLED

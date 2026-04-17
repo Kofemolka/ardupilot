@@ -2724,6 +2724,9 @@ void NavEKF3_core::verifyTiltErrorVariance() {
   of the earth to a minimum.
  */
 void NavEKF3_core::moveEKFOrigin(void) {
+  PIPE("ekf.pos.x", (float)stateStruct.position.x);
+  PIPE("ekf.pos.y", (float)stateStruct.position.y);
+
   // only move origin when we have a origin and we're using GPS
   if (!frontend->common_origin_valid || !filterStatus.flags.using_gps) {
     return;
@@ -2739,6 +2742,15 @@ void NavEKF3_core::moveEKFOrigin(void) {
   stateStruct.position.xy() += diffNE;
   outputDataNew.position.xy() += diffNE;
   outputDataDelayed.position.xy() += diffNE;
+
+#if EK3_FEATURE_BEACON_FUSION
+  // Keep beacon frame offset consistent with the origin shift.
+  // When EKF origin moves by diffNE, position drops by diffNE,
+  // so posOffsetNED must compensate by the same amount.
+  if (rngBcn.originEstInit) {
+    rngBcn.posOffsetNED.xy() += diffNE;
+  }
+#endif
 
   for (unsigned index = 0; index < imu_buffer_length; index++) {
     storedOutput[index].position.xy() += diffNE;

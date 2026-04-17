@@ -62,13 +62,6 @@ void NavEKF3_core::SelectRngBcnFusion() {
   // read range data from the sensor and check for new data in the buffer
   readRngBcnData();
 
-#if AP_PIPEDASH_ENABLED
-  if (auto *dash = AP_PipeDash::get_singleton()) {
-    dash->set("rngbcn.n", (float)rngBcn.receiverPos.x);
-    dash->set("rngbcn.e", (float)rngBcn.receiverPos.y);
-  }
-#endif
-
   // Determine if we need to fuse range beacon data on this time step
   if (rngBcn.dataToFuse) {
     if (PV_AidingMode == AID_ABSOLUTE) {
@@ -79,23 +72,6 @@ void NavEKF3_core::SelectRngBcnFusion() {
           rngBcn.originEstInit = true;
           rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
           rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
-          // #if AP_PIPEDASH_ENABLED
-          //                     if (auto *dash = AP_PipeDash::get_singleton())
-          //                     {
-          //                         dash->set("ekf.bof.pos_n",
-          //                         (float)stateStruct.position.x);
-          //                         dash->set("ekf.bof.pos_e",
-          //                         (float)stateStruct.position.y);
-          //                         dash->set("ekf.bof.rcv_n",
-          //                         (float)rngBcn.receiverPos.x);
-          //                         dash->set("ekf.bof.rcv_e",
-          //                         (float)rngBcn.receiverPos.y);
-          //                         dash->set("ekf.bof.ofs_n",
-          //                         (float)rngBcn.posOffsetNED.x);
-          //                         dash->set("ekf.bof.ofs_e",
-          //                         (float)rngBcn.posOffsetNED.y);
-          //                     }
-          // #endif
         }
         // beacons are used as the primary means of position reference
         FuseRngBcn();
@@ -116,9 +92,16 @@ void NavEKF3_core::SelectRngBcnFusion() {
       rngBcn.originEstInit = false;
     }
   }
+
+  PIPE("rng.x", (float)rngBcn.receiverPos.x);
+  PIPE("rng.y", (float)rngBcn.receiverPos.y);
+  PIPE("rng.health", rngBcn.health);
+  PIPE("rng.innov", (float)rngBcn.innov);
 }
 
 void NavEKF3_core::FuseRngBcn() {
+  PIPE("rng.mode", "range");
+
   // declarations
   ftype pn;
   ftype pe;
@@ -377,6 +360,8 @@ algorithm. Algorithm based on the following:
 https://github.com/priseborough/InertialNav/blob/master/derivations/range_beacon.m
 */
 void NavEKF3_core::FuseRngBcnStatic() {
+  PIPE("rng.mode", "static");
+
   // get the estimated range measurement variance
   const ftype R_RNG = sq(MAX(rngBcn.dataDelayed.rngErr, 0.1f));
 
@@ -553,15 +538,6 @@ void NavEKF3_core::FuseRngBcnStatic() {
     // fail if the ratio is > 1, but don't fail if bad IMU data
     rngBcn.health =
         ((rngBcn.testRatio < 1.0f) || badIMUdata || !rngBcn.alignmentCompleted);
-
-#if AP_PIPEDASH_ENABLED
-    if (auto *dash = AP_PipeDash::get_singleton()) {
-      dash->set("rngbcn.health", rngBcn.health);
-      dash->set("rngbcn.innov", (float)rngBcn.innov);
-      dash->set("rngbcn.testRatio", (float)rngBcn.testRatio);
-      dash->set("rngbcn.R_RNG", (float)R_RNG);
-    }
-#endif
 
     // test the ratio before fusing data
     if (rngBcn.health) {

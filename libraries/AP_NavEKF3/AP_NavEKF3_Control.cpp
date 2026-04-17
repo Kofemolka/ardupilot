@@ -518,14 +518,6 @@ void NavEKF3_core::setAidingMode() {
         GCS_SEND_TEXT(MAV_SEVERITY_INFO,
                       "EKF3 IMU%u initial beacon pos D offset = %3.1f (m)",
                       (unsigned)imu_index, (double)rngBcn.posOffsetNED.z);
-#if AP_PIPEDASH_ENABLED
-        if (auto *dash = AP_PipeDash::get_singleton()) {
-          dash->set("aid.pos_n", (float)stateStruct.position.x);
-          dash->set("aid.pos_e", (float)stateStruct.position.y);
-          dash->set("aid.rcv_n", (float)rngBcn.receiverPos.x);
-          dash->set("aid.rcv_e", (float)rngBcn.receiverPos.y);
-        }
-#endif
 #endif // EK3_FEATURE_BEACON_FUSION
 #if EK3_FEATURE_EXTERNAL_NAV
       } else if (readyToUseExtNav()) {
@@ -575,11 +567,8 @@ void NavEKF3_core::setAidingMode() {
     ResetPosition(posResetSource);
   }
 
-#if AP_PIPEDASH_ENABLED
-  if (auto *dash = AP_PipeDash::get_singleton()) {
-    dash->set("aid.mode", (int32_t)PV_AidingMode);
-  }
-#endif
+  PIPE("aid.mode",
+       PV_AidingMode == 0 ? "ABS" : (PV_AidingMode == 1 ? "NONE" : "REL"));
 }
 
 // Check the tilt and yaw alignmnent status
@@ -937,17 +926,13 @@ void NavEKF3_core::updateFilterStatus(void) {
 
   filterStatus.value = status.value;
 
-#if AP_PIPEDASH_ENABLED
-  if (auto *dash = AP_PipeDash::get_singleton()) {
-    dash->set("ekf.flag.attitude", status.flags.attitude);
-    dash->set("ekf.flag.horiz_vel", status.flags.horiz_vel);
-    dash->set("ekf.flag.vert_vel", status.flags.vert_vel);
-    dash->set("ekf.flag.horiz_pos_rel", status.flags.horiz_pos_rel);
-    dash->set("ekf.flag.horiz_pos_abs", status.flags.horiz_pos_abs);
-    dash->set("ekf.flag.vert_pos", status.flags.vert_pos);
-    dash->set("ekf.flag.using_gps", status.flags.using_gps);
-  }
-#endif
+  PIPE("ekf.flag.attitude", status.flags.attitude);
+  PIPE("ekf.flag.horiz_vel", status.flags.horiz_vel);
+  PIPE("ekf.flag.vert_vel", status.flags.vert_vel);
+  PIPE("ekf.flag.horiz_pos_rel", status.flags.horiz_pos_rel);
+  PIPE("ekf.flag.horiz_pos_abs", status.flags.horiz_pos_abs);
+  PIPE("ekf.flag.vert_pos", status.flags.vert_pos);
+  PIPE("ekf.flag.using_gps", status.flags.using_gps);
 }
 
 void NavEKF3_core::runYawEstimatorPrediction() {
