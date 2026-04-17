@@ -72,6 +72,8 @@ void NavEKF3_core::SelectRngBcnFusion() {
           rngBcn.originEstInit = true;
           rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
           rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
+          PIPE("rng.align.init.x", (float)rngBcn.posOffsetNED.x);
+          PIPE("rng.align.init.y", (float)rngBcn.posOffsetNED.y);
         }
         // beacons are used as the primary means of position reference
         FuseRngBcn();
