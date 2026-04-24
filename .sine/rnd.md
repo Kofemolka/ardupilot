@@ -383,3 +383,56 @@ Verification with example above:
 All three real drivers (Pozyx, Marvelmind, Nooploop) start without GPS.
 `using_gps` is always false → `moveEKFOrigin` never fires → `posOffsetNED`
 stays at its initial value of 0. The bug is exclusive to the GPS-first-then-switch path.
+
+---
+
+## Tuning: reducing EKF trust in beacon measurements (rely more on INS)
+
+**Files:** `libraries/AP_NavEKF3/AP_NavEKF3_RngBcnFusion.cpp:114`,
+`libraries/AP_NavEKF3/AP_NavEKF3_Measurements.cpp:1079`
+
+### How beacon influence is weighted
+
+The Kalman gain that controls how much each beacon measurement corrects the EKF state is:
+
+```
+K = P / (P + R_BCN)
+```
+
+`R_BCN` is computed at fusion time as:
+
+```cpp
+// RngBcnFusion.cpp:114
+const ftype R_BCN = sq(MAX(rngBcn.dataDelayed.rngErr, 0.1f));
+```
+
+`rngErr` is set directly from the `EK3_BCN_M_NSE` parameter:
+
+```cpp
+// Measurements.cpp:1079
+rngBcnDataNew.rngErr = frontend->_rngBcnNoise.get();
+```
+
+Larger `R_BCN` → smaller Kalman gain → each measurement corrects the state less → EKF
+relies more on INS dead-reckoning between measurements.
+
+### Parameters
+
+| Parameter       | Default | Effect                                                                    |
+| --------------- | ------- | ------------------------------------------------------------------------- |
+| `EK3_BCN_M_NSE` | `1.0` m | **Primary lever.** Increase to reduce beacon trust. `R_BCN = sq(value)`, so doubling it quarters the effective influence. |
+| `EK3_BCN_I_GTE` | `500` % | Innovation gate width. Decrease to outright reject measurements that deviate too far from predicted range (hard cut, not soft downweighting). |
+
+### Recommended starting points
+
+```
+EK3_BCN_M_NSE = 3.0   # ~9× less beacon influence than default; try 2.0–10.0
+EK3_BCN_I_GTE = 200   # tighter gate to discard noisy outliers
+```
+
+To trust INS predictions more independently, also lower the IMU process noise:
+
+```
+EK3_ACCEL_P_NSE   # decrease → EKF is more confident in its IMU prediction → lower K
+EK3_GYRO_P_NSE    # same effect
+```

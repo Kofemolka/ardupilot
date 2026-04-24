@@ -31,11 +31,17 @@ GPS2_TYPE,100
 # Primary
 GPS_AUTO_SWITCH,1
 
+# No GPS
+GPS1_TYPE,0
+
 ## -------------------------------------------
 ## Tuning
 
 # Beacon measurement noise
-EK3_BCN_M_NSE,10
+EK3_BCN_M_NSE,50
+
+# Innovation gate width, %
+EK3_BCN_I_GTE,200
 
 ## -------------------------------------------
 ## Debug behavior
