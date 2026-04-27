@@ -418,9 +418,9 @@ relies more on INS dead-reckoning between measurements.
 
 ### Parameters
 
-| Parameter       | Default | Effect                                                                    |
-| --------------- | ------- | ------------------------------------------------------------------------- |
-| `EK3_BCN_M_NSE` | `1.0` m | **Primary lever.** Increase to reduce beacon trust. `R_BCN = sq(value)`, so doubling it quarters the effective influence. |
+| Parameter       | Default | Effect                                                                                                                                        |
+| --------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EK3_BCN_M_NSE` | `1.0` m | **Primary lever.** Increase to reduce beacon trust. `R_BCN = sq(value)`, so doubling it quarters the effective influence.                     |
 | `EK3_BCN_I_GTE` | `500` % | Innovation gate width. Decrease to outright reject measurements that deviate too far from predicted range (hard cut, not soft downweighting). |
 
 ### Recommended starting points
@@ -436,3 +436,9 @@ To trust INS predictions more independently, also lower the IMU process noise:
 EK3_ACCEL_P_NSE   # decrease → EKF is more confident in its IMU prediction → lower K
 EK3_GYRO_P_NSE    # same effect
 ```
+
+
+----
+
+# Tips and tricks
+set EK3_BCN_M_NSE = 500 when hovering (copter loiter) and back to 150 when flying

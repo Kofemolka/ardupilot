@@ -20,6 +20,10 @@ local function is_straight_flight()
        and math.abs(ahrs:get_roll_rad()) < ROLL_MAX_RAD
 end
 
+local INJECT_DEADLINE_MS = 60000   -- force inject if this long without a correction
+
+local last_inject_ms = -INJECT_DEADLINE_MS   -- prime to allow immediate first inject
+
 -- Request pose every 10 seconds
 sine.request_pose(10000)
 
@@ -29,7 +33,10 @@ sine.on_pose(function(pose)
         return
     end
 
-    if not is_straight_flight() then
+    local now = millis():tofloat()
+    local overdue = (now - last_inject_ms) >= INJECT_DEADLINE_MS
+
+    if not overdue and not is_straight_flight() then
         gcs:send_text(6, "SNS: maneuver detected, skipping")
         return
     end
@@ -54,9 +61,11 @@ sine.on_pose(function(pose)
         frame = MAV_FRAME_GLOBAL,
     })
 
+    last_inject_ms = millis():tofloat()
     gcs:send_text(6, string.format(
-        "SNS: lat=%.6f lon=%.6f rmse=%.1fm",
-        pose.lat, pose.lon, pose.rmse))
+        "SNS: lat=%.6f lon=%.6f rmse=%.1fm%s",
+        pose.lat, pose.lon, pose.rmse,
+        overdue and " [deadline]" or ""))
 end)
 
 sine.init()
