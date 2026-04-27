@@ -15,12 +15,16 @@ local MODEM_COMP_ID    = 76   -- Link modem component ID
 local MODEM_UUID       = 0    -- 0 = any device; set to specific UUID if known
 
 -- link.v1 Type enum (subset)
-local TYPE_VI_GET_POSE       = 0x4C
+local TYPE_VI_GET_POSE           = 0x4C
+local TYPE_VI_SEND_BROADCAST_MSG = 0x53
 local TYPE_INVALID           = 0xFF
 local TYPE_ERR_PASSWORD      = 0xFE
 local TYPE_ERR_RELOAD        = 0xFD
 local TYPE_ERR_FPV           = 0xFC
 local TYPE_ERR_SLAVE_NOCONN  = 0xFB
+
+-- Broadcast payload type constants
+local BRD_SMS = 0x00
 
 local ERR_NAMES = {
     [TYPE_INVALID]          = "InvalidObject",
@@ -173,6 +177,9 @@ local function _handle_raw(raw)
         _last_pose = pose
         if _pose_cb then _pose_cb(pose) end
 
+    elseif t == TYPE_VI_SEND_BROADCAST_MSG then
+        -- modem echoes the broadcast back; nothing to do
+
     else
         gcs:send_text(5, string.format("Sine: unexpected type 0x%02X", t))
     end
@@ -237,6 +244,25 @@ end
 -- Pass nil to clear.
 function M.on_pose(callback)
     _pose_cb = callback
+end
+
+-- Send a viSendBroadcastMessage. origin is a uint32; payload is a Lua string ≤ 26 bytes.
+function M.broadcast_msg(origin, payload)
+    if not _initialized then return end
+    local pl26 = payload:sub(1, 26)
+    if #pl26 < 26 then pl26 = pl26 .. string.rep('\0', 26 - #pl26) end
+    -- byte2: body_size=30 (0x1E), is_remote=0, obj_index=0
+    local raw = string.char(TYPE_VI_SEND_BROADCAST_MSG, 0x1E, 0x00)
+             .. string.pack('<I4', origin)
+             .. pl26
+    _send_req(raw)
+end
+
+-- Send an SMS broadcast. text is truncated/padded to 25 bytes.
+function M.send_sms(origin, text)
+    local t25 = text:sub(1, 25)
+    if #t25 < 25 then t25 = t25 .. string.rep('\0', 25 - #t25) end
+    M.broadcast_msg(origin, string.char(BRD_SMS) .. t25)
 end
 
 return M
