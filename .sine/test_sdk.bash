@@ -12,7 +12,7 @@ mkdir -p scripts/modules
 cp .sine/sdk/modules/*.lua scripts/modules/
 cp .sine/sdk/pos_inject.lua scripts/pos_inject.lua
 # cp .sine/sdk/broadcast_demo.lua scripts/broadcast_demo.lua
-cp .sine/sdk/sms_demo.lua scripts/sms_demo.lua
+# cp .sine/sdk/sms_demo.lua scripts/sms_demo.lua
 
 PARAM_FILE="$(realpath .sine/sdk/sdk.param)"
 

@@ -103,20 +103,23 @@ local function link_parse_header(raw)
     return t, body_size, is_remote, obj_index
 end
 
--- Parse viPose response body (bytes 4..32 of raw, after 3-byte header)
+-- Parse viPose response (raw includes 3-byte header; body starts at byte 4)
 -- viPose body layout (packed, all LE):
---   [0-3]  ts          uint32
+--   [0-3]  ts          uint32   ms since boot
 --   [4-7]  lat         float
 --   [8-11] lon         float
---   [12-13] alt        uint16
---   [14-17] vn         float
---   [18-21] ve         float
---   [22-25] cog        float
+--   [12-13] alt        uint16   metres ASL
+--   [14-17] vn         float    velocity North
+--   [18-21] ve         float    velocity East
+--   [22-25] cog        float    course over ground
 --   [26]   valid       uint8 (bool)
---   [27]   _res        uint8
---   [28]   confidence  uint8
+--   [27]   flags       uint8    bits: 0=estimator_healthy 1=ins_healthy 2=compass_healthy
+--   [28]   confidence  uint8    0-10
+--   [29]   rmse        uint8    residual mean square error
+--   [30]   hdop        uint8    score
+--   [31]   yaw         uint8    1.5° LSB, North=0, CW
 local function parse_vi_pose(raw)
-    if #raw < 32 then
+    if #raw < 35 then
         return nil, string.format("viPose too short: %d bytes", #raw)
     end
     local ts, lat, lon, alt, vn, ve, cog, off
@@ -127,10 +130,24 @@ local function parse_vi_pose(raw)
     vn,  off = string.unpack('<f',  raw, off)
     ve,  off = string.unpack('<f',  raw, off)
     cog, off = string.unpack('<f',  raw, off)
-    local valid = raw:byte(off) ~= 0
-    local conf  = raw:byte(off + 2)
-    return { ts=ts, lat=lat, lon=lon, alt=alt, vn=vn, ve=ve, cog=cog,
-             valid=valid, confidence=conf }
+    -- off == 30 here (1-based)
+    local valid  = raw:byte(off)     ~= 0
+    local flags  = raw:byte(off + 1)
+    local conf   = raw:byte(off + 2)
+    local rmse   = raw:byte(off + 3)
+    local hdop   = raw:byte(off + 4)
+    local yaw    = raw:byte(off + 5) * 1.5   -- degrees
+    return {
+        ts=ts, lat=lat, lon=lon, alt=alt, vn=vn, ve=ve, cog=cog,
+        valid             = valid,
+        estimator_healthy = (flags & 0x01) ~= 0,
+        ins_healthy       = (flags & 0x02) ~= 0,
+        compass_healthy   = (flags & 0x04) ~= 0,
+        confidence        = conf,
+        rmse              = rmse,
+        hdop              = hdop,
+        yaw               = yaw,
+    }
 end
 
 -- ── Private mutable state (closure upvalues) ──────────────────────────────

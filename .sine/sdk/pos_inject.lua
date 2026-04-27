@@ -25,12 +25,12 @@ sine.request_pose(10000)
 
 sine.on_pose(function(pose)
     if not pose.valid then
-        gcs:send_text(5, "PosInject: pose not valid, skipping")
+        gcs:send_text(5, "SNS: pose not valid, skipping")
         return
     end
 
     if not is_straight_flight() then
-        gcs:send_text(6, "PosInject: maneuver detected, skipping")
+        gcs:send_text(6, "SNS: maneuver detected, skipping")
         return
     end
 
@@ -38,7 +38,7 @@ sine.on_pose(function(pose)
     local lat_i7 = math.tointeger(math.floor(pose.lat * 1e7 + 0.5))
     local lon_i7 = math.tointeger(math.floor(pose.lon * 1e7 + 0.5))
     if not lat_i7 or not lon_i7 then
-        gcs:send_text(4, "PosInject: lat/lon out of integer range")
+        gcs:send_text(4, "SNS: lat/lon out of integer range")
         return
     end
 
@@ -55,8 +55,8 @@ sine.on_pose(function(pose)
     })
 
     gcs:send_text(6, string.format(
-        "PosInject: lat=%.6f lon=%.6f rmse=%.1fm result=%d",
-        pose.lat, pose.lon, pose.rmse, result))
+        "SNS: lat=%.6f lon=%.6f rmse=%.1fm",
+        pose.lat, pose.lon, pose.rmse))
 end)
 
 sine.init()
