@@ -438,7 +438,84 @@ EK3_GYRO_P_NSE    # same effect
 ```
 
 
-----
+---
+
+## Setting EKF origin externally to break the beacon chicken-and-egg
+
+**Problem:** Beacons are not visible on the ground. The beacon driver needs the EKF origin set
+before it can propagate ranges, but the EKF origin is normally set from beacon data. Deadlock.
+
+**Solution:** `SET_GPS_GLOBAL_ORIGIN` (MAVLink message ID 48).
+
+Sending it calls `ahrs.set_origin()` → `NavEKF3::setOriginLLH()` → sets `validOrigin = true`
+and anchors the EKF world frame without any GPS or beacon data.
+
+### From a companion computer (pymavlink)
+
+```python
+conn.mav.set_gps_global_origin_send(
+    conn.target_system,
+    int(BCN_LAT * 1e7),   # latitude  × 1e7
+    int(BCN_LON * 1e7),   # longitude × 1e7
+    int(BCN_ALT * 1e3),   # altitude  in mm
+    0,                     # time_usec (optional)
+)
+```
+
+Send once at startup with the same coordinates as `BCN_LATITUDE/LONGITUDE/ALT`.
+
+### Boot sequence after the fix
+
+```
+boot
+  └─ companion sends SET_GPS_GLOBAL_ORIGIN (BCN_LAT/LON/ALT)
+       └─ validOrigin = true, EKF origin anchored
+            └─ beacon driver starts propagating ranges
+                 └─ FuseRngBcnStatic() → alignmentCompleted after ~200 meas
+                      └─ readyToUseRangeBeacon() → AID_ABSOLUTE
+```
+
+### Why GPS won't overwrite it
+
+`readRngBcnData()` gates `setOriginLLH()` on `!validOrigin`. Once set externally, GPS arriving
+later finds `validOrigin = true` and skips its own origin write — the beacon field anchor holds
+for the entire flight.
+
+---
+
+## Innovation gate death spiral under sudden wind change
+
+**Symptom:** Drastic wind change → position drift → range innovations grow → `rngBcn.health`
+goes false → fusion stops → drift accelerates → EKF never recovers absolute XY.
+
+**Root cause:** Once `testRatio > 1` and fusion stops, recovery requires `varInnov = R_BCN + H·P·H'`
+to grow large enough (via process noise accumulation in P) to bring `testRatio` back below 1.
+With a tight-converged P this can take very long or never happen.
+
+### Parameter fixes
+
+| Parameter       | Change | Effect |
+| --------------- | ------ | ------ |
+| `EK3_BCN_I_GTE` | 500 → 1000+ | Wider gate — harder to get kicked out during prediction errors |
+| `EK3_WIND_P_NSE` | 0.1 → 0.3–0.5 | Keeps P from converging too tightly on wind/velocity states → `varInnov` stays larger → gate widens naturally |
+
+### Code fix — bounded re-acquisition timeout
+
+Add to `FuseRngBcn()` after the health check (`AP_NavEKF3_RngBcnFusion.cpp:290`):
+
+```cpp
+if (!rngBcn.health &&
+    (imuSampleTime_ms - rngBcn.lastPassTime_ms) > BCN_REACQUIRE_TIMEOUT_MS) {
+    CovarianceInit();
+    rngBcn.lastPassTime_ms = imuSampleTime_ms;
+}
+```
+
+`BCN_REACQUIRE_TIMEOUT_MS = 5000` gives a hard 5 s bound on drift before P is reset to initial
+large values, guaranteeing `varInnov` is large on the next beacon measurement and fusion re-opens.
+The same pattern drives `posTimeout` / mode fallback in `AP_NavEKF3_Control.cpp`.
+
+---
 
 # Tips and tricks
 set EK3_BCN_M_NSE = 500 when hovering (copter loiter) and back to 150 when flying
