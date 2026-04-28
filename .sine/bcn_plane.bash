@@ -6,9 +6,9 @@ cd ..
 
 source .env/bin/activate
 
-PARAM_FILE="$(realpath .sine/sine_beacons_copter.param)"
+PARAM_FILE="$(realpath .sine/sine_beacons_plane.param)"
 
-Tools/autotest/sim_vehicle.py -v ArduCopter \
+Tools/autotest/sim_vehicle.py -v ArduPlane \
     -w \
     -j 8 --debug \
     --add-param-file="$PARAM_FILE" \
