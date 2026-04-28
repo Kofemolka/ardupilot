@@ -144,6 +144,9 @@ const AP_Scheduler::Task Plane::scheduler_tasks[] = {
 #if AP_QUICKTUNE_ENABLED
     SCHED_TASK(update_quicktune, 40, 100, 163),
 #endif
+#if AP_BEACON_ENABLED
+    SCHED_TASK_CLASS(AP_Beacon, &plane.g2.beacon, update, 400, 50, 166),
+#endif
 };
 
 void Plane::get_scheduler_tasks(const AP_Scheduler::Task *&tasks,
@@ -279,6 +282,9 @@ void Plane::update_logging10(void)
     if (should_log(MASK_LOG_CAMERA)) {
         camera_mount.write_log();
     }
+#endif
+#if AP_BEACON_ENABLED
+    g2.beacon.log();
 #endif
 }
 
