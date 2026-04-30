@@ -38,18 +38,25 @@ void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg) {
   mavlink_tunnel_t pkt;
   mavlink_msg_tunnel_decode(&msg, &pkt);
 
-  if (pkt.payload_type != 66 || pkt.payload_length < 13) {
+  if (pkt.payload_type != 66 || pkt.payload_length < 2) {
     return;
   }
 
-  switch (pkt.payload[0]) {
+  const uint8_t protocol_ver = pkt.payload[0];
+  if (protocol_ver != 0) {
+    // unsupported protocol version
+    return;
+  }
+
+  const uint8_t msg_type = pkt.payload[1];
+  switch (msg_type) {
   case 0:
-    if (pkt.payload_length >= 21) {
-      handle_range_msg(pkt.payload, pkt.payload_length);
-    }
+    if (pkt.payload_length < 17) return;
+    handle_range_msg(pkt.payload);
     break;
   case 1:
-    handle_pose_msg(pkt.payload, pkt.payload_length);
+    if (pkt.payload_length < 14) return;
+    handle_pose_msg(pkt.payload);
     break;
   default:
     return;
@@ -59,18 +66,17 @@ void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg) {
 }
 
 /*
- * Range message layout (22 bytes):
- *   [0]      msg_type  uint8   = 0
- *   [1]      id        uint8
- *   [2..5]   lat       int32   degrees × 1e7
- *   [6..9]   lon       int32   degrees × 1e7
- *   [10..13] alt       float32 metres AMSL
- *   [14..17] range     float32 metres
- *   [18..21] variance  float32 m²
+ * Range message layout (17 bytes):
+ *   [0]      protocol  uint8   = 0
+ *   [1]      type      uint8   = 0
+ *   [2]      id        uint8
+ *   [3..6]   lat       int32   degrees × 1e7
+ *   [7..10]  lon       int32   degrees × 1e7
+ *   [11..12] alt       uint16  metres AMSL
+ *   [13..16] range     float32 metres
  */
-void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload,
-                                      uint8_t payload_length) {
-  uint8_t beacon_id = payload[1];
+void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload) {
+  uint8_t beacon_id = payload[2];
   if (beacon_id >= AP_BEACON_MAX_BEACONS) {
     return;
   }
@@ -82,14 +88,14 @@ void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload,
   }
 
   int32_t lat, lon;
-  float alt_m, range_m, variance;
-  memcpy(&lat, payload + 2, sizeof(lat));
-  memcpy(&lon, payload + 6, sizeof(lon));
-  memcpy(&alt_m, payload + 10, sizeof(alt_m));
-  memcpy(&range_m, payload + 14, sizeof(range_m));
-  memcpy(&variance, payload + 18, sizeof(variance));
+  uint16_t alt_m;
+  float range_m;
+  memcpy(&lat, payload + 3, sizeof(lat));
+  memcpy(&lon, payload + 7, sizeof(lon));
+  memcpy(&alt_m, payload + 11, sizeof(alt_m));
+  memcpy(&range_m, payload + 13, sizeof(range_m));
 
-  const Location beacon_loc(lat, lon, (int32_t)(alt_m * 100.0f),
+  const Location beacon_loc(lat, lon, (int32_t)alt_m * 100,
                             Location::AltFrame::ABSOLUTE);
   const Vector3f ned = ekf_origin.get_distance_NED(beacon_loc);
 
@@ -102,14 +108,14 @@ void AP_Beacon_Sine::handle_range_msg(const uint8_t *payload,
 }
 
 /*
- * Pose message layout (13 bytes):
- *   [0]    msg_type  uint8   = 1
- *   [1..4] lat       int32   degrees × 1e7
- *   [5..8] lon       int32   degrees × 1e7
- *   [9..12] pos_error float32  metres
+ * Position message layout (14 bytes):
+ *   [0]     protocol          uint8   = 0
+ *   [1]     type              uint8   = 1
+ *   [2..5]  lat               int32   degrees × 1e7
+ *   [6..9]  lon               int32   degrees × 1e7
+ *   [10..13] accuracy_estimate float32 metres
  */
-void AP_Beacon_Sine::handle_pose_msg(const uint8_t *payload,
-                                     uint8_t payload_length) {
+void AP_Beacon_Sine::handle_pose_msg(const uint8_t *payload) {
   // Discard until the EKF has an origin to translate against.
   Location ekf_origin;
   if (!AP::ahrs().get_origin(ekf_origin)) {
@@ -118,9 +124,9 @@ void AP_Beacon_Sine::handle_pose_msg(const uint8_t *payload,
 
   int32_t lat, lon;
   float pos_error;
-  memcpy(&lat, payload + 1, sizeof(lat));
-  memcpy(&lon, payload + 5, sizeof(lon));
-  memcpy(&pos_error, payload + 9, sizeof(pos_error));
+  memcpy(&lat, payload + 2, sizeof(lat));
+  memcpy(&lon, payload + 6, sizeof(lon));
+  memcpy(&pos_error, payload + 10, sizeof(pos_error));
 
   // Use AHRS AMSL altitude for the vehicle position; fall back to 0 if
   // unavailable.

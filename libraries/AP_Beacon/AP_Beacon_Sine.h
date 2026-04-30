@@ -19,8 +19,8 @@ public:
   void handle_msg(const mavlink_message_t &msg) override;
 
 private:
-  void handle_range_msg(const uint8_t *payload, uint8_t payload_length);
-  void handle_pose_msg(const uint8_t *payload, uint8_t payload_length);
+  void handle_range_msg(const uint8_t *payload);
+  void handle_pose_msg(const uint8_t *payload);
 
   uint32_t last_update_ms = 0;
 };
