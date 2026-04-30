@@ -11,8 +11,6 @@ export PATH="$HOME/apps/toolchains/xpack/xpack-arm-none-eabi-gcc-13.3.1-1.1/bin:
 
 source .env/bin/activate
 
-./waf configure \
-    --board MatekH743 \
-    --extra-hwdef="$SCRIPT_DIR/sine_extra.dat"
+./waf configure --board speedybeef4v3 --bootloader
 
-./waf plane
+./waf bootloader
