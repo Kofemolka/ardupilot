@@ -4,6 +4,8 @@
 #include <SITL/SITL.h>
 #include <AP_Filesystem/AP_Filesystem.h>
 
+#include <AP_EstimatorIpcServer/AP_EstimatorIpcServer.h>
+
 #if AP_SIM_INS_ENABLED
 
 const extern AP_HAL::HAL& hal;
@@ -202,6 +204,15 @@ void AP_InertialSensor_SITL::generate_accel()
     _notify_new_accel_raw_sample(accel_instance, accel_accum, AP_HAL::micros64());
 
     _publish_temperature(accel_instance, get_temperature());
+
+    Estimator::Ipc::AP_EstimatorIpcServer::getSingleton().sendAccel(
+            AP_HAL::micros64(),
+            accel_instance,
+            accel_accum[0],
+            accel_accum[1],
+            accel_accum[2],
+            AP::ins().get_accel_health(accel_instance),
+            AP::ins().accel_calibrated_ok_all());
 }
 
 /*
@@ -306,6 +317,15 @@ void AP_InertialSensor_SITL::generate_gyro()
 
     _rotate_and_correct_gyro(gyro_instance, gyro_accum);
     _notify_new_gyro_raw_sample(gyro_instance, gyro_accum, AP_HAL::micros64());
+
+    Estimator::Ipc::AP_EstimatorIpcServer::getSingleton().sendGyro(
+            AP_HAL::micros64(),
+            gyro_instance,
+            gyro_accum[0],
+            gyro_accum[1],
+            gyro_accum[2],
+            AP::ins().get_gyro_health(gyro_instance),
+            AP::ins().gyro_calibrated_ok(gyro_instance));
 }
 
 void AP_InertialSensor_SITL::timer_update(void)

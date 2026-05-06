@@ -14,6 +14,7 @@
  */
 
 #include "AP_GPS_SITL.h"
+#include "AP_HAL/HAL.h"
 
 #if AP_SIM_GPS_ENABLED
 
@@ -22,6 +23,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/time.h>
+
+#include <AP_EstimatorIpcServer/AP_EstimatorIpcServer.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -113,6 +116,11 @@ bool AP_GPS_SITL::read(void)
     // state.speed_accuracy = pkt.horizontal_vel_accuracy;
 
     state.last_gps_time_ms = now;
+
+    Estimator::Ipc::AP_EstimatorIpcServer::getSingleton().sendGPS(
+        AP_HAL::micros64(),
+        state,
+        is_healthy());
 
     return true;
 }

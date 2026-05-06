@@ -5,6 +5,8 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 
+#include <AP_EstimatorIpcServer/AP_EstimatorIpcServer.h>
+
 extern const AP_HAL::HAL& hal;
 
 /*
@@ -135,6 +137,14 @@ void AP_Baro_SITL::_timer()
     _recent_press = p;
     _recent_temp = T;
     _has_sample = true;
+
+    Estimator::Ipc::AP_EstimatorIpcServer::getSingleton().sendBarometer(
+            AP_HAL::micros64(),
+            _instance,
+            _recent_temp,
+            _recent_press,
+            _frontend.sensors[_instance].healthy,
+            _frontend.sensors[_instance].calibrated);
 }
 
 // unhealthy if baro is turned off or beyond supported instances
