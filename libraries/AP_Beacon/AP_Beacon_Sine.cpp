@@ -27,7 +27,34 @@ bool AP_Beacon_Sine::healthy() {
 }
 
 // update the state of the sensor
-void AP_Beacon_Sine::update(void) {}
+void AP_Beacon_Sine::update(void) {
+  static int32_t fake_readings = 0;
+  if(fake_readings >= 500)
+    return;
+  
+  Location ekf_origin;
+  if (!AP::ahrs().get_origin(ekf_origin)) {
+    return;
+  }
+
+  if((AP_HAL::millis() - last_update_ms) < 25)
+    return;
+
+  last_update_ms = AP_HAL::millis();
+
+  static uint8_t fake_bcn_id = 0;
+
+  const Vector3f ned{10,0,0};
+  set_beacon_position(fake_bcn_id, ned);
+  set_beacon_distance(fake_bcn_id, 10);
+
+  PIPE("sine.warmup", fake_readings);
+  fake_readings++;
+
+  fake_bcn_id++;
+  if(fake_bcn_id == AP_BEACON_MAX_BEACONS)
+    fake_bcn_id = 0;
+}
 
 // handle mavlink message
 void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg) {
