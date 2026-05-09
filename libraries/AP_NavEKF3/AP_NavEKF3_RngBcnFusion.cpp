@@ -606,6 +606,10 @@ void NavEKF3_core::FuseRngBcnStatic() {
       report.testRatio = rngBcn.testRatio;
     }
   }
+
+  PIPE("rng.alig.num", rngBcn.numMeas);
+  PIPE("rng.alig.start", rngBcn.alignmentStarted);
+  PIPE("rng.alig.done", rngBcn.alignmentCompleted);
 }
 
 /*

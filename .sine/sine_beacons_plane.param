@@ -13,14 +13,13 @@ EK3_SRC1_VELXY,0
 EK3_SRC1_VELZ,0
 EK3_SRC1_YAW,1
 
-# SITL - for copilot to fake SNS
+# Enable GPS driver so GPS_RAW_INT / GPS2_RAW stream to GCS,
+# but EKF sources are all beacon/baro so GPS data is never fused.
+# To prevent GPS from also setting the EKF origin, call
+# set_ekf_origin() via MAVLink immediately on connect (ap.py).
+GPS1_TYPE,1
 GPS2_TYPE,100
-
-# Primary
-GPS_AUTO_SWITCH,1
-
-# No GPS
-GPS1_TYPE,0
+GPS_AUTO_SWITCH,0
 
 ## -------------------------------------------
 ## Tuning
@@ -30,10 +29,6 @@ EK3_BCN_M_NSE,50
 
 # Innovation gate width, %
 EK3_BCN_I_GTE,1000
-
-# Stabilization
-ATC_RATE_P_MAX,90
-ATC_RATE_R_MAX,90
 
 # Wind process noise
 EK3_WIND_P_NSE,0.5
