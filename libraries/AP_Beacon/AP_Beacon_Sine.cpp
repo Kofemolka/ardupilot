@@ -28,12 +28,27 @@ bool AP_Beacon_Sine::healthy() {
 
 // update the state of the sensor
 void AP_Beacon_Sine::update(void) {
-  static int32_t fake_readings = 0;
-  if(fake_readings >= 500)
+  PIPE("sine.warmup.done", warmup_complete);
+
+  if(!warmup_complete) {
+    warmup();
     return;
+  }
+}
+
+void AP_Beacon_Sine::warmup() {
+  if(warmup_readings >= 500) {
+    warmup_complete = true;
+    return;
+  }
   
   Location ekf_origin;
   if (!AP::ahrs().get_origin(ekf_origin)) {
+    return;
+  }
+
+  Location ahrs_loc;
+  if (!AP::ahrs().get_location(ahrs_loc)) {
     return;
   }
 
@@ -44,16 +59,18 @@ void AP_Beacon_Sine::update(void) {
 
   static uint8_t fake_bcn_id = 0;
 
-  const Vector3f ned{10,0,0};
-  set_beacon_position(fake_bcn_id, ned);
-  set_beacon_distance(fake_bcn_id, 10);
+  const Vector3f beacon_ned{10.0f, 0.0f, 0.0f};
+  const Vector3f vehicle_ned = ekf_origin.get_distance_NED(ahrs_loc);
+  const float dist = (beacon_ned - vehicle_ned).length();
+  set_beacon_position(fake_bcn_id, beacon_ned);
+  set_beacon_distance(fake_bcn_id, dist);
 
-  PIPE("sine.warmup", fake_readings);
-  fake_readings++;
+  PIPE("sine.warmup.readings", (int32_t)warmup_readings);
+  warmup_readings++;
 
   fake_bcn_id++;
   if(fake_bcn_id == AP_BEACON_MAX_BEACONS)
-    fake_bcn_id = 0;
+    fake_bcn_id = 0;  
 }
 
 // handle mavlink message

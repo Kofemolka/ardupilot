@@ -19,10 +19,14 @@ public:
   void handle_msg(const mavlink_message_t &msg) override;
 
 private:
+  void warmup();
   void handle_range_msg(const uint8_t *payload);
   void handle_pose_msg(const uint8_t *payload);
 
   uint32_t last_update_ms = 0;
+
+  uint32_t warmup_readings = 0;
+  bool warmup_complete = false;
 };
 
 #endif // AP_BEACON_SINE_ENABLED
