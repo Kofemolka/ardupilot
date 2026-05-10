@@ -2749,8 +2749,8 @@ void NavEKF3_core::moveEKFOrigin(void) {
   // so posOffsetNED must compensate by the same amount.
   if (rngBcn.originEstInit) {
     rngBcn.posOffsetNED.xy() += diffNE;
-    PIPE("rng.align.x", (float)rngBcn.posOffsetNED.x);
-    PIPE("rng.align.y", (float)rngBcn.posOffsetNED.y);
+    PIPE("rng.offset.x", (float)rngBcn.posOffsetNED.x);
+    PIPE("rng.offset.y", (float)rngBcn.posOffsetNED.y);
   }
 #endif
 

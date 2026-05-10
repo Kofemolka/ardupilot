@@ -1154,8 +1154,8 @@ void NavEKF3_core::readRngBcnData() {
     rngBcn.dataDelayed.beacon_posNED.y += rngBcn.posOffsetNED.y;
   }
 
-  PIPE("rng.align.x", (float)rngBcn.posOffsetNED.x);
-  PIPE("rng.align.y", (float)rngBcn.posOffsetNED.y);
+  PIPE("rng.offset.x", (float)rngBcn.posOffsetNED.x);
+  PIPE("rng.offset.y", (float)rngBcn.posOffsetNED.y);
 }
 #endif // EK3_FEATURE_BEACON_FUSION
 
