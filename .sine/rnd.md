@@ -517,5 +517,91 @@ The same pattern drives `posTimeout` / mode fallback in `AP_NavEKF3_Control.cpp`
 
 ---
 
+## Frame mismatch in `FuseRngBcn` when switching GPS → Beacons
+
+**Files:** `libraries/AP_NavEKF3/AP_NavEKF3_RngBcnFusion.cpp:131–137, 280`,
+`libraries/AP_NavEKF3/AP_NavEKF3_core.cpp:2726`
+
+### Two origins, two frames
+
+| Variable | Frame |
+|---|---|
+| `beacon_posNED` | `public_origin` = `common_EKF_origin` (fixed). Set via `handle_range_msg` → `AP::ahrs().get_origin()`. |
+| `stateStruct.position` | `EKF_origin` (moves every second in GPS mode via `moveEKFOrigin`). |
+
+`public_origin` and `EKF_origin` start equal at arm time. After the vehicle travels
+distance `d` in GPS mode, `EKF_origin` has shifted by `d` while `public_origin`
+stays fixed. `stateStruct.position` stays near `{0,0}` relative to the moving origin.
+
+### What `FuseRngBcn` was doing wrong
+
+The range prediction and innovation on lines 136–137 and 280:
+
+```cpp
+// old — frame mismatch
+Vector3F deltaPosNED = stateStruct.position - rngBcn.dataDelayed.beacon_posNED;
+// ...
+Vector3F delta = stateStruct.position - rngBcn.dataDelayed.beacon_posNED;
+rngBcn.innov = delta.length() - rngBcn.dataDelayed.rng;
+```
+
+`stateStruct.position` is in `EKF_origin` frame; `beacon_posNED` is in `public_origin`
+frame. Subtracting them is geometrically meaningless once the two origins have diverged.
+
+Concrete example — vehicle flew 500 m north, fake beacon at `{10, 0, 0}`:
+- `stateStruct.position ≈ {0, 0}` (EKF_origin is now at vehicle)
+- `beacon_posNED = {10, 0}` (still in fixed public_origin)
+- predicted range = 10 m
+- actual range = 490 m → huge innovation → fusion rejects or diverges
+
+Z was already corrected: line 133 adds `posOffsetNED.z` to `bcn_pd`. XY had no
+such correction despite `posOffsetNED.xy` being maintained by `moveEKFOrigin`.
+
+### Fix applied
+
+```cpp
+// new — posOffsetNED applied to all three axes
+bcn_pn = rngBcn.dataDelayed.beacon_posNED.x + rngBcn.posOffsetNED.x;
+bcn_pe = rngBcn.dataDelayed.beacon_posNED.y + rngBcn.posOffsetNED.y;
+bcn_pd = rngBcn.dataDelayed.beacon_posNED.z + rngBcn.posOffsetNED.z;
+
+// predicted range — all quantities in EKF_origin frame
+Vector3F deltaPosNED = Vector3F{pn - bcn_pn, pe - bcn_pe, pd - bcn_pd};
+rngPred = deltaPosNED.length();
+// ...
+// innovation reuses the already-corrected deltaPosNED (redundant delta removed)
+rngBcn.innov = deltaPosNED.length() - rngBcn.dataDelayed.rng;
+```
+
+### Why `posOffsetNED.xy` carries the right correction
+
+`posOffsetNED` is initialised on the first beacon fusion tick (`originEstInit` block):
+
+```cpp
+posOffsetNED.x = receiverPos.x - stateStruct.position.x;
+posOffsetNED.y = receiverPos.y - stateStruct.position.y;
+```
+
+`receiverPos` is the vehicle position in the `public_origin` frame (output of the
+3-state static pre-filter). `stateStruct.position` is in the `EKF_origin` frame.
+Their difference is exactly `EKF_origin → public_origin` in NED.
+
+`moveEKFOrigin` keeps it consistent during GPS mode via `posOffsetNED.xy() += diffNE`
+(the same delta applied to `stateStruct.position`), so by the time the switch happens
+`posOffsetNED.xy` encodes the full accumulated drift.
+
+Adding it to `beacon_posNED` converts beacons from `public_origin` frame into
+`EKF_origin` frame, making the subtraction from `stateStruct.position` geometrically
+valid.
+
+### Prerequisite: `posOffsetNED.xy` tracking in `moveEKFOrigin`
+
+This fix only works because `moveEKFOrigin` already updates `posOffsetNED.xy`
+(added in a prior commit, `core.cpp:2750–2753`). Without that tracking, `posOffsetNED`
+would go stale the first second after GPS mode starts, and applying a stale offset
+would be worse than applying none. The two changes are complementary.
+
+---
+
 # Tips and tricks
 set EK3_BCN_M_NSE = 500 when hovering (copter loiter) and back to 150 when flying
