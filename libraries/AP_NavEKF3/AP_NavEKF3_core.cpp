@@ -2745,10 +2745,10 @@ void NavEKF3_core::moveEKFOrigin(void) {
 
 #if EK3_FEATURE_BEACON_FUSION
   // Keep beacon frame offset consistent with the origin shift.
-  // When EKF origin moves by diffNE, position drops by diffNE,
-  // so posOffsetNED must compensate by the same amount.
+  // posOffsetNED = receiverPos - stateStruct.position; when position changes
+  // by +diffNE the offset must change by -diffNE to keep receiverPos invariant.
   if (rngBcn.originEstInit) {
-    rngBcn.posOffsetNED.xy() += diffNE;
+    rngBcn.posOffsetNED.xy() -= diffNE;
     PIPE("rng.offset.x", (float)rngBcn.posOffsetNED.x);
     PIPE("rng.offset.y", (float)rngBcn.posOffsetNED.y);
   }

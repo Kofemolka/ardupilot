@@ -125,8 +125,12 @@ void NavEKF3_core::FuseRngBcn() {
   }
 
   // copy required states to local variable names
-  pn = stateStruct.position.x;
-  pe = stateStruct.position.y;
+  // Apply posOffsetNED.xy() to shift EKF position into the beacon frame.
+  // beacon_posNED is in the fixed beacon frame; after moveEKFOrigin the EKF
+  // origin drifts away from that frame, so posOffsetNED bridges the gap.
+  // Z uses the same pattern but offsets the beacon side (bcn_pd).
+  pn = stateStruct.position.x + rngBcn.posOffsetNED.x;
+  pe = stateStruct.position.y + rngBcn.posOffsetNED.y;
   pd = stateStruct.position.z;
   bcn_pn = rngBcn.dataDelayed.beacon_posNED.x;
   bcn_pe = rngBcn.dataDelayed.beacon_posNED.y;
@@ -134,7 +138,7 @@ void NavEKF3_core::FuseRngBcn() {
 
   // predicted range
   Vector3F deltaPosNED =
-      stateStruct.position - rngBcn.dataDelayed.beacon_posNED;
+      Vector3F{pn, pe, pd} - rngBcn.dataDelayed.beacon_posNED;
   rngPred = deltaPosNED.length();
 
   // calculate measurement innovation
@@ -277,7 +281,7 @@ void NavEKF3_core::FuseRngBcn() {
     }
 
     // Calculate innovation using the selected offset value
-    Vector3F delta = stateStruct.position - rngBcn.dataDelayed.beacon_posNED;
+    Vector3F delta = Vector3F{pn, pe, pd} - rngBcn.dataDelayed.beacon_posNED;
     rngBcn.innov = delta.length() - rngBcn.dataDelayed.rng;
 
     // calculate the innovation consistency test ratio

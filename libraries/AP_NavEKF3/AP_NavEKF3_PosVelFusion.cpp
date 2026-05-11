@@ -691,6 +691,21 @@ void NavEKF3_core::SelectVelPosFusion() {
     }
   }
 
+#if EK3_FEATURE_BEACON_FUSION
+  // check for range beacon position reset
+  if (rngBcn.dataToFuse && (PV_AidingMode == AID_ABSOLUTE) &&
+      (posxy_source == AP_NavEKF_Source::SourceXY::BEACON) &&
+      posxy_source_reset) {
+    // mark a source reset as consumed
+    posxy_source_reset = false;
+    ResetPositionNE(rngBcn.receiverPos.x, rngBcn.receiverPos.y);
+    // posOffsetNED may have accumulated drift from moveEKFOrigin calls that
+    // happened between the source switch and this snap firing; reset it so
+    // SelectRngBcnFusion re-initialises it against the new position.
+    rngBcn.originEstInit = false;
+  }
+#endif // EK3_FEATURE_BEACON_FUSION
+
 #if EK3_FEATURE_EXTERNAL_NAV
   // check for external nav position reset
   if (extNavDataToFuse && (PV_AidingMode == AID_ABSOLUTE) &&
