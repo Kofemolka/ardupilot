@@ -20,8 +20,7 @@ public:
 
 private:
   void warmup();
-  void handle_range_msg(const uint8_t *payload);
-  void handle_pose_msg(const uint8_t *payload);
+  bool handle_range_msg(const mavlink_ranging_beacon_t& bcn_range);
 
   uint32_t last_update_ms = 0;
 
