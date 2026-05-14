@@ -82,6 +82,10 @@ void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg) {
   mavlink_ranging_beacon_t bcn_range;
   mavlink_msg_ranging_beacon_decode(&msg, &bcn_range);
 
+  if(bcn_range.target_component != MAV_COMP_ID_USER66) {
+    return;
+  }
+
   if(!handle_range_msg(bcn_range)) {
     return;
   }
@@ -104,7 +108,7 @@ bool AP_Beacon_Sine::handle_range_msg(const mavlink_ranging_beacon_t& bcn_range)
                             Location::AltFrame::ABSOLUTE);
   const Vector3f beacon_ned = ekf_origin.get_distance_NED(beacon_loc);
 
-  const float range_m = bcn_range.range / 100; // mm -> m
+  const float range_m = bcn_range.range / 1000; // mm -> m
 
   set_beacon_position(bcn_range.beacon_id, beacon_ned);
   set_beacon_distance(bcn_range.beacon_id, range_m); 

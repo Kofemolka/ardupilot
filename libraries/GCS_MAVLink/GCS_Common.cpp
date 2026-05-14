@@ -4398,7 +4398,7 @@ void GCS_MAVLINK::handle_message(const mavlink_message_t &msg)
 #endif
 
 #if AP_BEACON_ENABLED
-    case MAVLINK_MSG_ID_TUNNEL:
+    case MAVLINK_MSG_ID_RANGING_BEACON:
         {
             AP_Beacon *beacon = AP::beacon();
             if (beacon != nullptr) {
