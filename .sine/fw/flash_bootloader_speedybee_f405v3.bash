@@ -3,11 +3,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-BOOTLOADER="$REPO_DIR/build/speedybeef4v3/bin/AP_Bootloader.bin"
-# fallback path used by some waf versions
-[ -f "$BOOTLOADER" ] || BOOTLOADER="$REPO_DIR/build/speedybeef4v3/AP_Bootloader.bin"
+BOOTLOADER="$REPO_DIR/build/speedybeef4v3/bootloader/AP_Bootloader"
 
 if [ ! -f "$BOOTLOADER" ]; then
     echo "Bootloader not found: $BOOTLOADER"
