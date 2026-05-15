@@ -2,6 +2,30 @@
 
 #include "AP_PipeDash_config.h"
 
+#include <GCS_MAVLink/GCS.h>
+
+template<typename T, uint32_t interval_ms>
+class GCS_DBG {
+public:
+  GCS_DBG(const char* fmt) {
+    strncpy(fmt_, fmt, sizeof(fmt_) - 1);
+    fmt_[sizeof(fmt_) - 1] = '\0';
+  }
+
+  void update(const T value) {
+    if(AP_HAL::millis() - last_update_ < interval_ms)
+      return;
+
+    last_update_ = AP_HAL::millis();
+
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt_, value);
+  }
+
+private:
+  uint32_t last_update_ = 0;
+  char fmt_[50];
+};
+
 #if AP_PIPEDASH_ENABLED
 
 #include <AP_HAL/AP_HAL.h>
