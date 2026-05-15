@@ -132,6 +132,13 @@ void NavEKF3_core::FuseRngBcn() {
   bcn_pe = rngBcn.dataDelayed.beacon_posNED.y;
   bcn_pd = rngBcn.dataDelayed.beacon_posNED.z + rngBcn.posOffsetNED.z;
 
+  PIPE("fuse.state.x", (float)stateStruct.position.x);
+  PIPE("fuse.state.y", (float)stateStruct.position.y);
+  PIPE("fuse.bcn.x", (float)rngBcn.dataDelayed.beacon_posNED.x);
+  PIPE("fuse.bcn.y", (float)rngBcn.dataDelayed.beacon_posNED.y);
+  PIPE("fuse.recpos.x", (float)rngBcn.receiverPos.x);
+  PIPE("fuse.recpos.y", (float)rngBcn.receiverPos.y);
+
   // predicted range
   Vector3F deltaPosNED =
       stateStruct.position - rngBcn.dataDelayed.beacon_posNED;
@@ -139,6 +146,10 @@ void NavEKF3_core::FuseRngBcn() {
 
   // calculate measurement innovation
   rngBcn.innov = rngPred - rngBcn.dataDelayed.rng;
+
+  PIPE("fuse.range.innov", (float)rngBcn.innov);
+  PIPE("fuse.range.msrd", (float)rngBcn.dataDelayed.rng);
+  PIPE("fuse.range.pred", (float)rngPred);
 
   // perform fusion of range measurement
   if (rngPred > 0.1f) {
@@ -334,6 +345,9 @@ void NavEKF3_core::FuseRngBcn() {
         for (uint8_t j = 0; j <= stateIndexLim; j++) {
           statesArray[j] = statesArray[j] - Kfusion[j] * rngBcn.innov;
         }
+
+        PIPE("fuse.x", (float)stateStruct.position.x);
+        PIPE("fuse.y", (float)stateStruct.position.y);
 
         // record healthy fusion
         faultStatus.bad_rngbcn = false;
