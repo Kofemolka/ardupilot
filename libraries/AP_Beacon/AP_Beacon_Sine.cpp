@@ -75,6 +75,10 @@ void AP_Beacon_Sine::warmup() {
 
 // handle mavlink message
 void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg) {
+  if(!warmup_complete) {
+    return;
+  }
+
   if (msg.msgid != MAVLINK_MSG_ID_RANGING_BEACON) {
     return;
   }
