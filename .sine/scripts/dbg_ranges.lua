@@ -7,25 +7,17 @@
 --  + wind_estimate
 
 
--- rng.alig.done
--- rng.alig.start
--- rng.mode
--- rng.innov - not exposed
--- rng.x/y
-
--- sine.rng[0-5]
--- sine.warmup.done
-
 local function dbg_wind()
     wind = ahrs:wind_estimate()
     wind_dir_rad = math.atan(wind:y(), wind:x())+math.pi
     wind_dir_180 = math.floor(wrap_180(math.deg(wind_dir_rad)))
 
-    gcs:send_text(6, string.format("wnd: %.0f", wind_dir_180))
+    local wind_spd = math.sqrt(wind:x()^2 + wind:y()^2)
+    gcs:send_text(6, string.format("wnd from: %.0f deg  %.1f m/s", wind_dir_180, wind_spd))
 end
 
 local function dbg_ekf()
-    local src_set = ahrs:get_posvelyaw_source_set()
+    local src_set = ahrs:get_posvelyaw_source_set() + 1
 
     local inno = ahrs:get_vel_innovations_and_variances_for_source(4)
     if (inno) then
