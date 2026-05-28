@@ -4,6 +4,7 @@
 
 #include <GCS_MAVLink/GCS.h>
 
+// TODO: if WHAT?
 template<typename T, uint32_t interval_ms>
 class GCS_DBG {
 public:
@@ -17,12 +18,22 @@ public:
       return;
 
     last_update_ = AP_HAL::millis();
+    last_value_ = value;
 
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt_, value);
   }
 
+  void on_change(const T value) {
+    if(value != last_value_) {
+      GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt_, value);
+
+      last_value_ = value;
+    }
+  }
+
 private:
   uint32_t last_update_ = 0;
+  T last_value_{};
   char fmt_[50];
 };
 

@@ -99,9 +99,6 @@ void NavEKF3_core::SelectRngBcnFusion() {
   PIPE("rng.y", (float)rngBcn.receiverPos.y);
   PIPE("rng.health", rngBcn.health);
   PIPE("rng.innov", (float)rngBcn.innov);
-
-  static GCS_DBG<bool, 5000> dbg_health("rng.health - %d");
-  dbg_health.update(rngBcn.health);
 }
 
 void NavEKF3_core::FuseRngBcn() {

@@ -23,7 +23,17 @@ AP_Beacon_Sine::AP_Beacon_Sine(AP_Beacon &frontend)
 
 // return true if sensor is basically healthy (we are receiving data)
 bool AP_Beacon_Sine::healthy() {
-  return (AP_HAL::millis() - last_update_ms) < AP_BEACON_TIMEOUT_MS;
+  const auto ok = (AP_HAL::millis() - last_update_ms) < 550;
+
+  static bool last_health = false;
+
+  if(ok != last_health) {
+    static GCS_DBG<bool, 5000> dbg_health("bcn.healthy - %d");
+    dbg_health.on_change(ok);
+    last_health = ok;
+  }
+
+  return ok;
 }
 
 // update the state of the sensor
