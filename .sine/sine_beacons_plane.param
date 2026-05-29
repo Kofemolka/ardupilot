@@ -54,6 +54,9 @@ EK3_WIND_P_NSE,0.5
 # log data before arming to asist with diasnostics
 LOG_DISARMED,1
 
+# log replay data
+LOG_REPLAY,1
+
 # Do nothing on failsafe
 FS_EKF_ACTION,0
 
