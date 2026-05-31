@@ -25,14 +25,6 @@ AP_Beacon_Sine::AP_Beacon_Sine(AP_Beacon &frontend)
 bool AP_Beacon_Sine::healthy() {
   const auto ok = (AP_HAL::millis() - last_update_ms) < 550;
 
-  static bool last_health = false;
-
-  if(ok != last_health) {
-    static GCS_DBG<bool, 5000> dbg_health("bcn.healthy - %d");
-    dbg_health.on_change(ok);
-    last_health = ok;
-  }
-
   return ok;
 }
 

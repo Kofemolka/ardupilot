@@ -4,37 +4,26 @@
 
 #include <GCS_MAVLink/GCS.h>
 
-// TODO: if WHAT?
-template<typename T, uint32_t interval_ms>
 class GCS_DBG {
 public:
-  GCS_DBG(const char* fmt) {
-    strncpy(fmt_, fmt, sizeof(fmt_) - 1);
-    fmt_[sizeof(fmt_) - 1] = '\0';
+  GCS_DBG(uint32_t interval_ms) : interval_ms_(interval_ms) {
   }
 
-  void update(const T value) {
-    if(AP_HAL::millis() - last_update_ < interval_ms)
+  void update(MAV_SEVERITY severity, const char* fmt, ...) FMT_PRINTF(3, 4) {
+    if(AP_HAL::millis() - last_update_ < interval_ms_)
       return;
 
     last_update_ = AP_HAL::millis();
-    last_value_ = value;
 
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt_, value);
-  }
-
-  void on_change(const T value) {
-    if(value != last_value_) {
-      GCS_SEND_TEXT(MAV_SEVERITY_INFO, fmt_, value);
-
-      last_value_ = value;
-    }
+    va_list ap;
+    va_start(ap, fmt);
+    gcs().send_textv(severity, fmt, ap);
+    va_end(ap);
   }
 
 private:
   uint32_t last_update_ = 0;
-  T last_value_{};
-  char fmt_[50];
+  uint32_t interval_ms_ = 0;
 };
 
 #if AP_PIPEDASH_ENABLED

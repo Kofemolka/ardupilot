@@ -1408,6 +1408,7 @@ private:
         ftype receiverPosCov[3][3];         // Receiver position covariance (m^2) - alignment 3 state filter (
         bool alignmentStarted;        // True when the initial position alignment using range measurements has started
         bool alignmentCompleted;      // True when the initial position alignment using range measurements has finished
+        bool isRangeFusion;           // true when fusing via FuseRngBcn (range mode), false when using FuseRngBcnStatic
         uint8_t lastIndex;            // Range beacon index last read -  used during initialisation of the 3-state filter
         Vector3F posSum;              // Sum of range beacon NED position (m) - used during initialisation of the 3-state filter
         uint8_t numMeas;                 // Number of beacon measurements - used during initialisation of the 3-state filter
@@ -1659,6 +1660,8 @@ private:
     void Log_Write_XKFS(uint64_t time_us) const;
     void Log_Write_Quaternion(uint64_t time_us) const;
     void Log_Write_Beacon(uint64_t time_us);
+    void Log_Write_XKRB(uint64_t time_us);
+    void Log_Write_RngBcnPos(uint64_t time_us);
     void Log_Write_BodyOdom(uint64_t time_us);
     void Log_Write_State_Variances(uint64_t time_us);
     void Log_Write_Timing(uint64_t time_us);

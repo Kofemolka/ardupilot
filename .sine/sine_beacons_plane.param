@@ -57,6 +57,8 @@ LOG_DISARMED,1
 # log replay data
 LOG_REPLAY,1
 
+EK3_LOG_LEVEL,0
+
 # Do nothing on failsafe
 FS_EKF_ACTION,0
 

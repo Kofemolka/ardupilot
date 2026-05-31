@@ -99,9 +99,17 @@ void NavEKF3_core::SelectRngBcnFusion() {
   PIPE("rng.y", (float)rngBcn.receiverPos.y);
   PIPE("rng.health", rngBcn.health);
   PIPE("rng.innov", (float)rngBcn.innov);
+
+  static GCS_DBG dbg_health(5000);
+  
+  if(frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) {
+    bool healthy = (AP_HAL::millis() - rngBcn.lastPassTime_ms) < 1000;
+    dbg_health.update(healthy ? MAV_SEVERITY_INFO : MAV_SEVERITY_ERROR, "Range system: %s", healthy ? "OK" : "BAD");
+  }
 }
 
 void NavEKF3_core::FuseRngBcn() {
+  rngBcn.isRangeFusion = true;
   PIPE("rng.mode", "range");
 
   // declarations
@@ -376,6 +384,7 @@ algorithm. Algorithm based on the following:
 https://github.com/priseborough/InertialNav/blob/master/derivations/range_beacon.m
 */
 void NavEKF3_core::FuseRngBcnStatic() {
+  rngBcn.isRangeFusion = false;
   PIPE("rng.mode", "static");
 
   // get the estimated range measurement variance
