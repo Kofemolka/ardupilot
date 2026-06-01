@@ -64,6 +64,27 @@ void NavEKF3_core::SelectRngBcnFusion() {
 
   // Determine if we need to fuse range beacon data on this time step
   if (rngBcn.dataToFuse) {
+    // If alignment completed but health has been failing long enough that
+    // process noise self-recovery is impossible, re-seed receiverPos from the
+    // current EKF position and re-enter phase 2 (health bypass for 100 steps).
+    // alignmentStarted stays true so phase 1 data collection is skipped.
+    if ((frontend->sources.getPosXYSource(core_index) ==
+             AP_NavEKF_Source::SourceXY::BEACON) &&
+        rngBcn.alignmentCompleted &&
+        (imuSampleTime_ms - rngBcn.lastPassTime_ms) > 5000U) {
+      rngBcn.alignmentCompleted = false;
+      rngBcn.numMeas = 90;  // need only 10 more measurements to re-declare complete
+      rngBcn.receiverPos = stateStruct.position;
+      // Stamp lastPassTime_ms now so: (a) the dead-check does not re-fire
+      // immediately after phase-2 completes, and (b) posAidLossCritical in
+      // Control.cpp does not abort the recovery window (~4 s for 100 steps).
+      rngBcn.lastPassTime_ms = imuSampleTime_ms;
+      memset(rngBcn.receiverPosCov, 0, sizeof(rngBcn.receiverPosCov));
+      rngBcn.receiverPosCov[0][0] =
+      rngBcn.receiverPosCov[1][1] =
+      rngBcn.receiverPosCov[2][2] = 100.0f;
+      GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "EKF3 IMU%u rng beacon dead, resetting", (unsigned)imu_index);
+    }
     if (PV_AidingMode == AID_ABSOLUTE) {
       if ((frontend->sources.getPosXYSource(core_index) ==
            AP_NavEKF_Source::SourceXY::BEACON) &&
