@@ -748,6 +748,9 @@ private:
     // use range beacon measurements to calculate a static position
     void FuseRngBcnStatic();
 
+    // multilateration position fix used to recover a dead ranging system
+    void FuseRngBcnMlat();
+
     // calculate the offset from EKF vertical position datum to the range beacon system datum
     void CalcRangeBeaconPosDownOffset(ftype obsVar, Vector3F &vehiclePosNED, bool aligning);
 
@@ -1408,7 +1411,10 @@ private:
         ftype receiverPosCov[3][3];         // Receiver position covariance (m^2) - alignment 3 state filter (
         bool alignmentStarted;        // True when the initial position alignment using range measurements has started
         bool alignmentCompleted;      // True when the initial position alignment using range measurements has finished
-        bool isRangeFusion;           // true when fusing via FuseRngBcn (range mode), false when using FuseRngBcnStatic
+        enum class RngFusionMode : uint8_t { STATIC = 0, RANGE = 1, MLAT = 2 };
+        RngFusionMode fusionMode;     // active fusion path
+        uint8_t mlatPassCount;        // consecutive successful MLAT passes since dead detection
+        ftype hdop;                   // last 2-D HDOP from geometry check (MLAT_MAX_HDOP = not yet valid)
         uint8_t lastIndex;            // Range beacon index last read -  used during initialisation of the 3-state filter
         Vector3F posSum;              // Sum of range beacon NED position (m) - used during initialisation of the 3-state filter
         uint8_t numMeas;                 // Number of beacon measurements - used during initialisation of the 3-state filter
