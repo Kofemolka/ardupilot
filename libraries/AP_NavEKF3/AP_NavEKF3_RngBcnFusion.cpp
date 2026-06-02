@@ -861,9 +861,6 @@ static constexpr uint8_t MLAT_REVIVE_PASSES      = 5;
 static constexpr ftype   MLAT_LEARNING_RATE      = 0.1f;   // tune to beacon scale
 static constexpr ftype   MLAT_TOLERANCE          = 1.f;  // m — convergence criterion
 static constexpr uint8_t MLAT_MAX_ITER           = 30;
-// Mean squared range residual threshold: fix is accepted when below this value.
-// Set relative to expected ranging noise; tune for the specific beacon system.
-static constexpr ftype   MLAT_MAX_RESIDUAL_SQ    = 2500.0f;   // (50 m RMS) // TODO: move to params
 
 /*
   2-D gradient-descent MLAT solver, adapted from MLAT::solve().
@@ -989,16 +986,14 @@ void NavEKF3_core::FuseRngBcnMlat()
 
   PIPE("rng.mlat.resid", (float)result.residualSq);
 
-  // --- Step 4: residual validation ---
+  // --- Step 4: update receiverPos and count the pass ---
   //
-  // Reject if the converged fix is inconsistent with the range measurements.
-  // This catches bad geometry that passed the HDOP check and wrong positions
-  // that haven't converged yet.
-  if (result.residualSq > MLAT_MAX_RESIDUAL_SQ) {
-    return;
-  }
-
-  // --- Step 5: update receiverPos and count the pass ---
+  // If the system is DEAD, any convergence moves
+  // receiverPos closer to truth for the next MLAT iteration.  If MLAT
+  // lands at a wrong position that then passes MLAT_REVIVE_PASSES, the
+  // ranging system (FuseRngBcn) will see large innovations, reject them,
+  // and isDead will re-fire — natural self-correction without a hard
+  // residual threshold blocking iterative recovery.
   rngBcn.receiverPos.x = result.x;
   rngBcn.receiverPos.y = result.y;
   rngBcn.mlatPassCount++;
@@ -1009,7 +1004,7 @@ void NavEKF3_core::FuseRngBcnMlat()
     return;
   }
 
-  // --- Step 6: EKF position reset → direct re-entry into range fusion ---
+  // --- Step 5: EKF position reset → direct re-entry into range fusion ---
   //
   // MLAT has converged: move stateStruct.position to the fix so the very next
   // FuseRngBcn() call sees a small innovation and passes the health check.
