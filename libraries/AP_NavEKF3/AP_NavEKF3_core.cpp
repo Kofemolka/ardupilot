@@ -762,6 +762,12 @@ void NavEKF3_core::correctDeltaVelocity(Vector3F &delVel, ftype delVelDT,
  * error in the attitude of the vehicle when each observation is fused. This
  * attitude error is then used to correct the quaternion.
  */
+
+// Maneuver acceleration std-dev used to inflate receiverPosCov each IMU step.
+// This keeps varInnov honest so the FuseRngBcnStatic gate can reopen after
+// prediction-induced drift even when beacon measurements are sparse.
+static constexpr float MLAT_RCVR_SIGMA_A = 1.0f;  // m/s²
+
 void NavEKF3_core::UpdateStrapdownEquationsNED() {
   // update the quaternion states by rotating from the previous attitude through
   // the delta angle rotation quaternion and normalise
@@ -827,6 +833,15 @@ void NavEKF3_core::UpdateStrapdownEquationsNED() {
   if (filterStatus.flags.horiz_vel) {
     rngBcn.receiverPos += (stateStruct.velocity + lastVelocity) *
                           (imuDataDelayed.delVelDT * 0.5f);
+  }
+  // Inflate receiverPosCov every IMU step to reflect growing prediction uncertainty.
+  // When horiz_vel is false (IMU-only mode), position is frozen but the covariance
+  // must still grow so FuseRngBcnStatic's varInnov becomes large enough for the
+  // testRatio gate to reopen and pull receiverPos back toward truth.
+  if (rngBcn.alignmentCompleted) {
+    const ftype qPos = sq(MLAT_RCVR_SIGMA_A * imuDataDelayed.delVelDT);
+    rngBcn.receiverPosCov[0][0] += qPos;
+    rngBcn.receiverPosCov[1][1] += qPos;
   }
 #endif
 }
