@@ -8,7 +8,7 @@ cd ..
 
 source .env/bin/activate
 
-./waf configure --board sitl
+./waf configure --board sitl --out=build/replay
 ./waf replay
 
-./build/sitl/tool/Replay ${SRC_FILE}
+./build/replay/sitl/tool/Replay ${SRC_FILE}
