@@ -84,8 +84,6 @@ void NavEKF3_core::SelectRngBcnFusion() {
           rngBcn.originEstInit = true;
           rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
           rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
-          PIPE("rng.align.init.x", (float)rngBcn.posOffsetNED.x);
-          PIPE("rng.align.init.y", (float)rngBcn.posOffsetNED.y);
         }
         // beacons are used as the primary means of position reference
         FuseRngBcn();
@@ -107,22 +105,15 @@ void NavEKF3_core::SelectRngBcnFusion() {
     }
   }
 
-  PIPE("rng.x", (float)rngBcn.receiverPos.x);
-  PIPE("rng.y", (float)rngBcn.receiverPos.y);
-  PIPE("rng.health", rngBcn.health);
-  PIPE("rng.innov", (float)rngBcn.innov);
-
-  static GCS_DBG dbg_health(5000);
-  
-  if(frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) {
-    bool healthy = (AP_HAL::millis() - rngBcn.lastPassTime_ms) < 1000;
-    dbg_health.update(healthy ? MAV_SEVERITY_INFO : MAV_SEVERITY_ERROR, "Range system: %s", healthy ? "OK" : "BAD");
-  }
+  // TODO: other temp way to report health every 5s
+  // if(frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) {
+  //   bool healthy = (AP_HAL::millis() - rngBcn.lastPassTime_ms) < 1000;
+  //   dbg_health.update(healthy ? MAV_SEVERITY_INFO : MAV_SEVERITY_ERROR, "Range system: %s", healthy ? "OK" : "BAD");
+  // }
 }
 
 void NavEKF3_core::FuseRngBcn() {
   rngBcn.fusionMode = BeaconFusion::RngFusionMode::RANGE;
-  PIPE("rng.mode", "range");
 
   // declarations
   ftype pn;
@@ -152,13 +143,6 @@ void NavEKF3_core::FuseRngBcn() {
   bcn_pe = rngBcn.dataDelayed.beacon_posNED.y;
   bcn_pd = rngBcn.dataDelayed.beacon_posNED.z + rngBcn.posOffsetNED.z;
 
-  PIPE("fuse.state.x", (float)stateStruct.position.x);
-  PIPE("fuse.state.y", (float)stateStruct.position.y);
-  PIPE("fuse.bcn.x", (float)rngBcn.dataDelayed.beacon_posNED.x);
-  PIPE("fuse.bcn.y", (float)rngBcn.dataDelayed.beacon_posNED.y);
-  PIPE("fuse.recpos.x", (float)rngBcn.receiverPos.x);
-  PIPE("fuse.recpos.y", (float)rngBcn.receiverPos.y);
-
   // predicted range
   Vector3F deltaPosNED =
       stateStruct.position - rngBcn.dataDelayed.beacon_posNED;
@@ -166,10 +150,6 @@ void NavEKF3_core::FuseRngBcn() {
 
   // calculate measurement innovation
   rngBcn.innov = rngPred - rngBcn.dataDelayed.rng;
-
-  PIPE("fuse.range.innov", (float)rngBcn.innov);
-  PIPE("fuse.range.msrd", (float)rngBcn.dataDelayed.rng);
-  PIPE("fuse.range.pred", (float)rngPred);
 
   // perform fusion of range measurement
   if (rngPred > 0.1f) {
@@ -366,9 +346,6 @@ void NavEKF3_core::FuseRngBcn() {
           statesArray[j] = statesArray[j] - Kfusion[j] * rngBcn.innov;
         }
 
-        PIPE("fuse.x", (float)stateStruct.position.x);
-        PIPE("fuse.y", (float)stateStruct.position.y);
-
         // record healthy fusion
         faultStatus.bad_rngbcn = false;
 
@@ -397,7 +374,6 @@ https://github.com/priseborough/InertialNav/blob/master/derivations/range_beacon
 */
 void NavEKF3_core::FuseRngBcnStatic() {
   rngBcn.fusionMode = BeaconFusion::RngFusionMode::STATIC;
-  PIPE("rng.mode", "static");
 
   // get the estimated range measurement variance
   const ftype R_RNG = sq(MAX(rngBcn.dataDelayed.rngErr, 0.1f));
@@ -641,10 +617,6 @@ void NavEKF3_core::FuseRngBcnStatic() {
       report.testRatio = rngBcn.testRatio;
     }
   }
-
-  PIPE("rng.alig.num", rngBcn.numMeas);
-  PIPE("rng.alig.start", rngBcn.alignmentStarted);
-  PIPE("rng.alig.done", rngBcn.alignmentCompleted);
 }
 
 /*
@@ -944,7 +916,6 @@ static MlatResult solveMlat(const MlatSample *samples, uint8_t n,
 void NavEKF3_core::FuseRngBcnMlat()
 {
   rngBcn.fusionMode = BeaconFusion::RngFusionMode::MLAT;
-  PIPE("rng.mode", "mlat");
 
   // --- Step 1: collect fresh readings from healthy beacons (<1 s old) ---
 
@@ -984,8 +955,6 @@ void NavEKF3_core::FuseRngBcnMlat()
                                       rngBcn.receiverPos.x,
                                       rngBcn.receiverPos.y);
 
-  PIPE("rng.mlat.resid", (float)result.residualSq);
-
   // --- Step 4: update receiverPos and count the pass ---
   //
   // If the system is DEAD, any convergence moves
@@ -997,8 +966,6 @@ void NavEKF3_core::FuseRngBcnMlat()
   rngBcn.receiverPos.x = result.x;
   rngBcn.receiverPos.y = result.y;
   rngBcn.mlatPassCount++;
-
-  PIPE("rng.mlat.pass", (float)rngBcn.mlatPassCount);
 
   if (rngBcn.mlatPassCount < MLAT_REVIVE_PASSES) {
     return;
@@ -1031,8 +998,6 @@ void NavEKF3_core::FuseRngBcnMlat()
   // Stamp lastPassTime_ms so the dead-check does not re-fire immediately.
   rngBcn.lastPassTime_ms = imuSampleTime_ms;
   rngBcn.mlatPassCount   = 0;
-
-  GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "EKF3 IMU%u rng beacon MLAT reset", (unsigned)imu_index);
 }
 
 #endif // EK3_FEATURE_BEACON_FUSION

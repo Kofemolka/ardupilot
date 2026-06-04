@@ -4,7 +4,6 @@
 #include "AP_NavEKF3_core.h"
 #include <AP_DAL/AP_DAL.h>
 #include <AP_Logger/AP_Logger.h>
-#include <AP_PipeDash/AP_PipeDash.h>
 #include <AP_VisualOdom/AP_VisualOdom.h>
 #include <GCS_MAVLink/GCS.h>
 
@@ -2740,9 +2739,6 @@ void NavEKF3_core::verifyTiltErrorVariance() {
  */
 void NavEKF3_core::moveEKFOrigin(void) {
   return; // TODO: no move until transtition from GPS->BCN is fixed
-  
-  PIPE("ekf.pos.x", (float)stateStruct.position.x);
-  PIPE("ekf.pos.y", (float)stateStruct.position.y);
 
   // only move origin when we have a origin and we're using GPS
   if (!frontend->common_origin_valid || !filterStatus.flags.using_gps) {

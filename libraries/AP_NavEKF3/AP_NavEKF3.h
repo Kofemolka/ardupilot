@@ -24,7 +24,6 @@
 #include <AP_NavEKF/AP_NavEKF_Source.h>
 #include <AP_NavEKF/AP_Nav_Common.h>
 #include <AP_Param/AP_Param.h>
-#include <AP_PipeDash/AP_PipeDash.h>
 
 class NavEKF3_core;
 class EKFGSF_yaw;

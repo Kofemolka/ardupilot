@@ -5,7 +5,6 @@
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_Common/Location.h>
 #include <AP_HAL/AP_HAL.h>
-#include <AP_PipeDash/AP_PipeDash.h>
 #include <GCS_MAVLink/GCS.h>
 
 extern const AP_HAL::HAL &hal;
@@ -30,8 +29,6 @@ bool AP_Beacon_Sine::healthy() {
 
 // update the state of the sensor
 void AP_Beacon_Sine::update(void) {
-  PIPE("sine.warmup.done", warmup_complete);
-
   if(!warmup_complete) {
     warmup();
     return;
@@ -67,7 +64,6 @@ void AP_Beacon_Sine::warmup() {
   set_beacon_position(fake_bcn_id, beacon_ned);
   set_beacon_distance(fake_bcn_id, dist);
 
-  PIPE("sine.warmup.readings", (int32_t)warmup_readings);
   warmup_readings++;
 
   fake_bcn_id++;
@@ -118,12 +114,6 @@ bool AP_Beacon_Sine::handle_range_msg(const mavlink_ranging_beacon_t& bcn_range)
 
   set_beacon_position(bcn_range.beacon_id, beacon_ned);
   set_beacon_distance(bcn_range.beacon_id, range_m); 
-
-#if AP_PIPEDASH_ENABLED
-  char key[11] = "sine.rng.0";
-  key[9] = '0' + bcn_range.beacon_id;
-#endif
-  PIPE(key, range_m);
 
   return true;
 }

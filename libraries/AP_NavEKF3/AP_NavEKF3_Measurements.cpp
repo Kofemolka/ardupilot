@@ -6,7 +6,6 @@
 #include <AP_DAL/AP_DAL.h>
 #include <AP_InternalError/AP_InternalError.h>
 #include <AP_Logger/AP_Logger.h>
-#include <AP_PipeDash/AP_PipeDash.h>
 #include <GCS_MAVLink/GCS.h>
 
 #if AP_RANGEFINDER_ENABLED
@@ -1153,9 +1152,6 @@ void NavEKF3_core::readRngBcnData() {
     rngBcn.dataDelayed.beacon_posNED.x += rngBcn.posOffsetNED.x;
     rngBcn.dataDelayed.beacon_posNED.y += rngBcn.posOffsetNED.y;
   }
-
-  PIPE("rng.offset.x", (float)rngBcn.posOffsetNED.x);
-  PIPE("rng.offset.y", (float)rngBcn.posOffsetNED.y);
 }
 #endif // EK3_FEATURE_BEACON_FUSION
 

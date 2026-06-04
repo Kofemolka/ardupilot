@@ -3,7 +3,6 @@
 #include "AP_NavEKF3.h"
 #include "AP_NavEKF3_core.h"
 #include <AP_DAL/AP_DAL.h>
-#include <AP_PipeDash/AP_PipeDash.h>
 #include <GCS_MAVLink/GCS.h>
 
 /********************************************************
@@ -98,9 +97,6 @@ void NavEKF3_core::ResetVelocity(resetDataSource velResetSource) {
 // resets position states to last GPS measurement or to zero if in constant
 // position mode
 void NavEKF3_core::ResetPosition(resetDataSource posResetSource) {
-  PIPE("reset.src", (int32_t)posResetSource);
-  PIPE("reset.ts", (int32_t)imuSampleTime_ms);
-
   // if reset source is not specified thenn use the user defined position source
   if (posResetSource == resetDataSource::DEFAULT) {
     switch (frontend->sources.getPosXYSource(core_index)) {
@@ -155,9 +151,6 @@ void NavEKF3_core::ResetPosition(resetDataSource posResetSource) {
       const int32_t tdiff = imuDataDelayed.time_ms - gps_corrected.time_ms;
       stateStruct.position.xy() += gps_corrected.vel.xy() * 0.001 * tdiff;
 
-      PIPE("reset.to_gps.x", (float)stateStruct.position.x);
-      PIPE("reset.to_gps.y", (float)stateStruct.position.y);
-
       // set the variances using the position measurement noise parameter
       P[7][7] = P[8][8] = sq(MAX(gpsPosAccuracy, frontend->_gpsHorizPosNoise));
 #if EK3_FEATURE_BEACON_FUSION
@@ -169,8 +162,6 @@ void NavEKF3_core::ResetPosition(resetDataSource posResetSource) {
       stateStruct.position.x = rngBcn.receiverPos.x;
       stateStruct.position.y = rngBcn.receiverPos.y;
 
-      PIPE("reset.to_rng.x", (float)stateStruct.position.x);
-      PIPE("reset.to_rng.y", (float)stateStruct.position.y);
       // set the variances from the beacon alignment filter
       P[7][7] = rngBcn.receiverPosCov[0][0];
       P[8][8] = rngBcn.receiverPosCov[1][1];

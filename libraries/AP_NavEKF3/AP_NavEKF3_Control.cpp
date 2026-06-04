@@ -2,7 +2,6 @@
 
 #include "AP_NavEKF3.h"
 #include "AP_NavEKF3_core.h"
-#include <AP_PipeDash/AP_PipeDash.h>
 #include <GCS_MAVLink/GCS.h>
 
 #include "AP_DAL/AP_DAL.h"
@@ -566,9 +565,6 @@ void NavEKF3_core::setAidingMode() {
     ResetVelocity(velResetSource);
     ResetPosition(posResetSource);
   }
-
-  PIPE("aid.mode",
-       PV_AidingMode == 0 ? "ABS" : (PV_AidingMode == 1 ? "NONE" : "REL"));
 }
 
 // Check the tilt and yaw alignmnent status
@@ -925,14 +921,6 @@ void NavEKF3_core::updateFilterStatus(void) {
                                   doingNormalGpsNav || doingBodyVelNav);
 
   filterStatus.value = status.value;
-
-  PIPE("ekf.flag.attitude", status.flags.attitude);
-  PIPE("ekf.flag.horiz_vel", status.flags.horiz_vel);
-  PIPE("ekf.flag.vert_vel", status.flags.vert_vel);
-  PIPE("ekf.flag.horiz_pos_rel", status.flags.horiz_pos_rel);
-  PIPE("ekf.flag.horiz_pos_abs", status.flags.horiz_pos_abs);
-  PIPE("ekf.flag.vert_pos", status.flags.vert_pos);
-  PIPE("ekf.flag.using_gps", status.flags.using_gps);
 }
 
 void NavEKF3_core::runYawEstimatorPrediction() {
