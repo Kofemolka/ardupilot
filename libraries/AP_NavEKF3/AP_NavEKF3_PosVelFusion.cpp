@@ -12,7 +12,7 @@ FILE *ekf3_hgt_debug_file()
 {
   static FILE *fp = nullptr;
   if (fp == nullptr) {
-    fp = std::fopen("/tmp/ekf3_hgt_debug.log", "a");
+    fp = std::fopen("/home/mbublyk/Documents/ardu/estimator_files/ardupilot_ekf3_hgt_debug.log", "a");
   }
   return fp;
 }
