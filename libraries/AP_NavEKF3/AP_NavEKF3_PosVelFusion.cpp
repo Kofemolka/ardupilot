@@ -5,6 +5,37 @@
 #include <AP_DAL/AP_DAL.h>
 #include <AP_PipeDash/AP_PipeDash.h>
 #include <GCS_MAVLink/GCS.h>
+#include <cstdio>
+
+namespace {
+FILE *ekf3_hgt_debug_file()
+{
+  static FILE *fp = nullptr;
+  if (fp == nullptr) {
+    fp = std::fopen("/tmp/ekf3_hgt_debug.log", "a");
+  }
+  return fp;
+}
+
+const char *ekf3_hgt_source_name(AP_NavEKF_Source::SourceZ src)
+{
+  switch (src) {
+  case AP_NavEKF_Source::SourceZ::NONE:
+    return "NONE";
+  case AP_NavEKF_Source::SourceZ::BARO:
+    return "BARO";
+  case AP_NavEKF_Source::SourceZ::RANGEFINDER:
+    return "RANGEFINDER";
+  case AP_NavEKF_Source::SourceZ::GPS:
+    return "GPS";
+  case AP_NavEKF_Source::SourceZ::BEACON:
+    return "BEACON";
+  case AP_NavEKF_Source::SourceZ::EXTNAV:
+    return "EXTNAV";
+  }
+  return "UNKNOWN";
+}
+}
 
 /********************************************************
  *                   RESET FUNCTIONS                     *
@@ -1137,6 +1168,18 @@ void NavEKF3_core::FuseVelPosNED() {
     for (obsIndex = 0; obsIndex <= 5; obsIndex++) {
       if (fuseData[obsIndex]) {
         stateIndex = 4 + obsIndex;
+        const bool is_height_fusion = (obsIndex == 5);
+        ftype raw_hgt_innov = 0.0f;
+        bool ground_effect_applied = false;
+        const auto before_pos = stateStruct.position;
+        const auto before_vel = stateStruct.velocity;
+        const auto before_quat = stateStruct.quat;
+        const auto before_gyro_bias = stateStruct.gyro_bias;
+        const auto before_accel_bias = stateStruct.accel_bias;
+        Vector3F before_euler;
+        if (is_height_fusion) {
+          before_quat.to_euler(before_euler.x, before_euler.y, before_euler.z);
+        }
         // calculate the measurement innovation, using states from a different
         // time coordinate if fusing height data adjust scaling on GPS
         // measurement noise variances if not enough satellites
@@ -1157,6 +1200,7 @@ void NavEKF3_core::FuseVelPosNED() {
         } else if (obsIndex == 5) {
           innovVelPos[obsIndex] =
               stateStruct.position[obsIndex - 3] - velPosObs[obsIndex];
+          raw_hgt_innov = innovVelPos[obsIndex];
           const ftype gndMaxBaroErr =
               MAX(frontend->_baroGndEffectDeadZone, 0.0);
           const ftype gndBaroInnovFloor = -0.5;
@@ -1175,6 +1219,7 @@ void NavEKF3_core::FuseVelPosNED() {
             innovVelPos[5] +=
                 constrain_ftype(-innovVelPos[5] + gndBaroInnovFloor, 0.0f,
                                 gndBaroInnovFloor + gndMaxBaroErr);
+            ground_effect_applied = true;
           }
         }
 
@@ -1253,6 +1298,15 @@ void NavEKF3_core::FuseVelPosNED() {
           zero_range(&Kfusion[0], 22, 23);
         }
 
+        ftype hgt_pcol9_before[16] = {};
+        ftype hgt_kfusion_before[16] = {};
+        if (is_height_fusion) {
+          for (uint8_t i = 0; i <= 15; i++) {
+            hgt_pcol9_before[i] = P[i][9];
+            hgt_kfusion_before[i] = Kfusion[i];
+          }
+        }
+
         // update the covariance - take advantage of direct observation of a
         // single state at index = stateIndex to reduce computations this is a
         // numerically optimised implementation of standard equation P = (I -
@@ -1290,6 +1344,56 @@ void NavEKF3_core::FuseVelPosNED() {
           }
           stateStruct.quat.normalize();
 
+          if (is_height_fusion) {
+            Vector3F after_euler;
+            stateStruct.quat.to_euler(after_euler.x, after_euler.y, after_euler.z);
+            if (FILE *fp = ekf3_hgt_debug_file()) {
+              std::fprintf(
+                  fp,
+                  "EK3_HGT ts_ms=%lu time_us=%llu core=%u imu=%u source=%s accepted=1 onGround=%u aiding=%u motorsArmed=%u badIMU=%u takeoffExpected=%u touchdownExpected=%u hgtTimeout=%u raw_innov=%.9g innov=%.9g meas_z=%.9g pred_z=%.9g R=%.9g S=%.9g hgtTestRatio=%.9g groundEffectApplied=%u pos_before=(%.9g,%.9g,%.9g) vel_before=(%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) gyro_bias_before=(%.9g,%.9g,%.9g) accel_bias_before=(%.9g,%.9g,%.9g) Pcol9=(%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g) K=(%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g) pos_after=(%.9g,%.9g,%.9g) vel_after=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) gyro_bias_after=(%.9g,%.9g,%.9g) accel_bias_after=(%.9g,%.9g,%.9g) drpy=(%.9g,%.9g,%.9g)\n",
+                  (unsigned long)imuSampleTime_ms,
+                  (unsigned long long)imuDataDelayed.time_ms,
+                  (unsigned)core_index,
+                  (unsigned)imu_index,
+                  ekf3_hgt_source_name(activeHgtSource),
+                  onGround ? 1U : 0U,
+                  (unsigned)PV_AidingMode,
+                  motorsArmed ? 1U : 0U,
+                  badIMUdata ? 1U : 0U,
+                  dal.get_takeoff_expected() ? 1U : 0U,
+                  dal.get_touchdown_expected() ? 1U : 0U,
+                  hgtTimeout ? 1U : 0U,
+                  (double)raw_hgt_innov,
+                  (double)innovVelPos[obsIndex],
+                  (double)velPosObs[obsIndex],
+                  (double)before_pos.z,
+                  (double)R_OBS[obsIndex],
+                  (double)varInnovVelPos[obsIndex],
+                  (double)hgtTestRatio,
+                  ground_effect_applied ? 1U : 0U,
+                  (double)before_pos.x, (double)before_pos.y, (double)before_pos.z,
+                  (double)before_vel.x, (double)before_vel.y, (double)before_vel.z,
+                  (double)before_euler.x, (double)before_euler.y, (double)before_euler.z,
+                  (double)before_gyro_bias.x, (double)before_gyro_bias.y, (double)before_gyro_bias.z,
+                  (double)before_accel_bias.x, (double)before_accel_bias.y, (double)before_accel_bias.z,
+                  hgt_pcol9_before[0], hgt_pcol9_before[1], hgt_pcol9_before[2], hgt_pcol9_before[3],
+                  hgt_pcol9_before[4], hgt_pcol9_before[5], hgt_pcol9_before[6], hgt_pcol9_before[7],
+                  hgt_pcol9_before[8], hgt_pcol9_before[9], hgt_pcol9_before[10], hgt_pcol9_before[11],
+                  hgt_pcol9_before[12], hgt_pcol9_before[13], hgt_pcol9_before[14], hgt_pcol9_before[15],
+                  hgt_kfusion_before[0], hgt_kfusion_before[1], hgt_kfusion_before[2], hgt_kfusion_before[3],
+                  hgt_kfusion_before[4], hgt_kfusion_before[5], hgt_kfusion_before[6], hgt_kfusion_before[7],
+                  hgt_kfusion_before[8], hgt_kfusion_before[9], hgt_kfusion_before[10], hgt_kfusion_before[11],
+                  hgt_kfusion_before[12], hgt_kfusion_before[13], hgt_kfusion_before[14], hgt_kfusion_before[15],
+                  (double)stateStruct.position.x, (double)stateStruct.position.y, (double)stateStruct.position.z,
+                  (double)stateStruct.velocity.x, (double)stateStruct.velocity.y, (double)stateStruct.velocity.z,
+                  (double)after_euler.x, (double)after_euler.y, (double)after_euler.z,
+                  (double)stateStruct.gyro_bias.x, (double)stateStruct.gyro_bias.y, (double)stateStruct.gyro_bias.z,
+                  (double)stateStruct.accel_bias.x, (double)stateStruct.accel_bias.y, (double)stateStruct.accel_bias.z,
+                  (double)(after_euler.x - before_euler.x), (double)(after_euler.y - before_euler.y), (double)(after_euler.z - before_euler.z));
+              std::fflush(fp);
+            }
+          }
+
           // record good fusion status
           if (obsIndex == 0) {
             faultStatus.bad_nvel = false;
@@ -1305,6 +1409,47 @@ void NavEKF3_core::FuseVelPosNED() {
             faultStatus.bad_dpos = false;
           }
         } else {
+          if (is_height_fusion) {
+            if (FILE *fp = ekf3_hgt_debug_file()) {
+              std::fprintf(
+                  fp,
+                  "EK3_HGT ts_ms=%lu time_us=%llu core=%u imu=%u source=%s accepted=0 onGround=%u aiding=%u motorsArmed=%u badIMU=%u takeoffExpected=%u touchdownExpected=%u hgtTimeout=%u raw_innov=%.9g innov=%.9g meas_z=%.9g pred_z=%.9g R=%.9g S=%.9g hgtTestRatio=%.9g groundEffectApplied=%u pos_before=(%.9g,%.9g,%.9g) vel_before=(%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) gyro_bias_before=(%.9g,%.9g,%.9g) accel_bias_before=(%.9g,%.9g,%.9g) Pcol9=(%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g) K=(%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g)\n",
+                  (unsigned long)imuSampleTime_ms,
+                  (unsigned long long)imuDataDelayed.time_ms,
+                  (unsigned)core_index,
+                  (unsigned)imu_index,
+                  ekf3_hgt_source_name(activeHgtSource),
+                  onGround ? 1U : 0U,
+                  (unsigned)PV_AidingMode,
+                  motorsArmed ? 1U : 0U,
+                  badIMUdata ? 1U : 0U,
+                  dal.get_takeoff_expected() ? 1U : 0U,
+                  dal.get_touchdown_expected() ? 1U : 0U,
+                  hgtTimeout ? 1U : 0U,
+                  (double)raw_hgt_innov,
+                  (double)innovVelPos[obsIndex],
+                  (double)velPosObs[obsIndex],
+                  (double)before_pos.z,
+                  (double)R_OBS[obsIndex],
+                  (double)varInnovVelPos[obsIndex],
+                  (double)hgtTestRatio,
+                  ground_effect_applied ? 1U : 0U,
+                  (double)before_pos.x, (double)before_pos.y, (double)before_pos.z,
+                  (double)before_vel.x, (double)before_vel.y, (double)before_vel.z,
+                  (double)before_euler.x, (double)before_euler.y, (double)before_euler.z,
+                  (double)before_gyro_bias.x, (double)before_gyro_bias.y, (double)before_gyro_bias.z,
+                  (double)before_accel_bias.x, (double)before_accel_bias.y, (double)before_accel_bias.z,
+                  hgt_pcol9_before[0], hgt_pcol9_before[1], hgt_pcol9_before[2], hgt_pcol9_before[3],
+                  hgt_pcol9_before[4], hgt_pcol9_before[5], hgt_pcol9_before[6], hgt_pcol9_before[7],
+                  hgt_pcol9_before[8], hgt_pcol9_before[9], hgt_pcol9_before[10], hgt_pcol9_before[11],
+                  hgt_pcol9_before[12], hgt_pcol9_before[13], hgt_pcol9_before[14], hgt_pcol9_before[15],
+                  hgt_kfusion_before[0], hgt_kfusion_before[1], hgt_kfusion_before[2], hgt_kfusion_before[3],
+                  hgt_kfusion_before[4], hgt_kfusion_before[5], hgt_kfusion_before[6], hgt_kfusion_before[7],
+                  hgt_kfusion_before[8], hgt_kfusion_before[9], hgt_kfusion_before[10], hgt_kfusion_before[11],
+                  hgt_kfusion_before[12], hgt_kfusion_before[13], hgt_kfusion_before[14], hgt_kfusion_before[15]);
+              std::fflush(fp);
+            }
+          }
           // record bad fusion status
           if (obsIndex == 0) {
             faultStatus.bad_nvel = true;
