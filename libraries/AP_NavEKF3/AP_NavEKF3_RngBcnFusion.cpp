@@ -4,6 +4,7 @@
 #if EK3_FEATURE_BEACON_FUSION
 
 #include <AP_DAL/AP_DAL.h>
+#include <GCS_MAVLink/GCS.h>
 
 // initialise state:
 void NavEKF3_core::BeaconFusion::InitialiseVariables() {
@@ -54,6 +55,7 @@ void NavEKF3_core::BeaconFusion::InitialiseVariables() {
   }
   posOffsetNED.zero();
   originEstInit = false;
+  lastHealthReportMs = 0;
 }
 
 /********************************************************
@@ -105,11 +107,21 @@ void NavEKF3_core::SelectRngBcnFusion() {
     }
   }
 
-  // TODO: other temp way to report health every 5s
-  // if(frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) {
-  //   bool healthy = (AP_HAL::millis() - rngBcn.lastPassTime_ms) < 1000;
-  //   dbg_health.update(healthy ? MAV_SEVERITY_INFO : MAV_SEVERITY_ERROR, "Range system: %s", healthy ? "OK" : "BAD");
-  // }
+  if (frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) {
+    if ((imuSampleTime_ms - rngBcn.lastHealthReportMs) > 5000U) {
+      rngBcn.lastHealthReportMs = imuSampleTime_ms;
+      const bool healthy = (imuSampleTime_ms - rngBcn.lastPassTime_ms) < 1000U;
+      if (!healthy) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "RNG IMU%u: BAD", (unsigned)imu_index);
+      } else {
+        const char *mode =
+            rngBcn.fusionMode == BeaconFusion::RngFusionMode::MLAT   ? "MLAT" :
+            rngBcn.fusionMode == BeaconFusion::RngFusionMode::RANGE  ? "RANGE" :
+                                                                        "STATIC";
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RNG IMU%u: %s", (unsigned)imu_index, mode);
+      }
+    }
+  }
 }
 
 void NavEKF3_core::FuseRngBcn() {
@@ -792,9 +804,10 @@ static constexpr ftype MLAT_MAX_HDOP = 5.0f;
 // Compute 2-D HDOP from the Fisher Information Matrix of unit-vector rows:
 //   H^T*H = [[hxx, hxy],[hxy, hyy]]
 //   HDOP  = sqrt(trace(inv(H^T*H))) = sqrt((hxx+hyy)/det)
-// Returns MLAT_MAX_HDOP when geometry is degenerate (collinear or < 2 valid beacons).
-static ftype checkMlatGeometry(const MlatSample *samples, uint8_t n,
-                               const Vector3F &pos)
+// Returns false when geometry is degenerate (< 2 valid beacons or collinear);
+// returns true and writes the actual HDOP to `hdop` otherwise.
+static bool getHdop(const MlatSample *samples, uint8_t n,
+                    const Vector3F &pos, ftype &hdop)
 {
   ftype hxx = 0.0f, hyy = 0.0f, hxy = 0.0f;
   uint8_t valid = 0;
@@ -803,7 +816,7 @@ static ftype checkMlatGeometry(const MlatSample *samples, uint8_t n,
     const ftype dx   = samples[i].bcnPosNED.x - pos.x;
     const ftype dy   = samples[i].bcnPosNED.y - pos.y;
     const ftype norm = sqrtF(dx * dx + dy * dy);
-    if (norm < 0.1f) { // ignore beacons coincident with pos
+    if (norm < 0.1f) {
       continue;
     }
     const ftype ux = dx / norm;
@@ -815,15 +828,16 @@ static ftype checkMlatGeometry(const MlatSample *samples, uint8_t n,
   }
 
   if (valid < 2) {
-    return MLAT_MAX_HDOP;
+    return false;
   }
 
   const ftype det = hxx * hyy - hxy * hxy;
   if (det < 1e-6f) {
-    return MLAT_MAX_HDOP;  // collinear
+    return false;  // collinear
   }
 
-  return constrain_ftype(sqrtF((hxx + hyy) / det), 0.0f, MLAT_MAX_HDOP);
+  hdop = sqrtF((hxx + hyy) / det);
+  return true;
 }
 
 // Number of successful MLAT passes required before the EKF position is reset.
@@ -942,8 +956,18 @@ void NavEKF3_core::FuseRngBcnMlat()
   // --- Step 2: geometry check against current receiverPos ---
   //
   // rngBcn.receiverPos accumulates towards truth across successive calls.
-  rngBcn.hdop = checkMlatGeometry(samples, numSamples, rngBcn.receiverPos);
+  if (!getHdop(samples, numSamples, rngBcn.receiverPos, rngBcn.hdop)) {
+    GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                  "RNG IMU%u beacon geometry degenerate",
+                  (unsigned)imu_index);
+    return;
+  }
   if (rngBcn.hdop >= MLAT_MAX_HDOP) {
+    GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                  "RNG IMU%u beacon HDOP %.1f >= MAX %.1f",
+                  (unsigned)imu_index,
+                  (double)rngBcn.hdop,
+                  (double)MLAT_MAX_HDOP);
     return;
   }
 
@@ -998,6 +1022,8 @@ void NavEKF3_core::FuseRngBcnMlat()
   // Stamp lastPassTime_ms so the dead-check does not re-fire immediately.
   rngBcn.lastPassTime_ms = imuSampleTime_ms;
   rngBcn.mlatPassCount   = 0;
+
+  GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RNG IMU%u MLAT reset", (unsigned)imu_index);
 }
 
 #endif // EK3_FEATURE_BEACON_FUSION

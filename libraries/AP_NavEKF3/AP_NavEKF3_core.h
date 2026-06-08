@@ -1445,6 +1445,7 @@ private:
             Vector3F beaconPosNED; // beacon NED position
         } *fusionReport;
         uint8_t numFusionReports;
+        uint32_t lastHealthReportMs;  // last time health status was sent to GCS
 
         AP_DAL &dal;
     } rngBcn{dal};
