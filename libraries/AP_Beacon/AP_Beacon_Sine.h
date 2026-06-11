@@ -6,16 +6,10 @@
 
 class AP_Beacon_Sine : public AP_Beacon_Backend {
 public:
-  // constructor
   AP_Beacon_Sine(AP_Beacon &frontend);
 
-  // return true if sensor is basically healthy (we are receiving data)
   bool healthy() override;
-
-  // update
   void update() override;
-
-  // handle mavlink message
   void handle_msg(const mavlink_message_t &msg) override;
 
 private:
