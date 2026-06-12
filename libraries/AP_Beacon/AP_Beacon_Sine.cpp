@@ -20,14 +20,12 @@ AP_Beacon_Sine::AP_Beacon_Sine(AP_Beacon &frontend)
   }
 }
 
-// return true if sensor is basically healthy (we are receiving data)
 bool AP_Beacon_Sine::healthy() {
   const auto ok = (AP_HAL::millis() - last_update_ms) < 550;
 
   return ok;
 }
 
-// update the state of the sensor
 void AP_Beacon_Sine::update(void) {
   if(!warmup_complete) {
     warmup();
