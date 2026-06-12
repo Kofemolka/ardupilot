@@ -743,14 +743,17 @@ private:
 #if EK3_FEATURE_BEACON_FUSION
     // fuse range beacon measurements
     void FuseRngBcn();
-#endif
-
-    // use range beacon measurements to calculate a static position
-    void FuseRngBcnStatic();
 
     // multilateration position fix used to recover a dead ranging system
     void DoRngBcnRecovery();
 
+    Vector2F SolveMlat(const rng_bcn_elements *samples, uint8_t n, ftype& residualSq);
+
+    bool GetHdop(const rng_bcn_elements *samples, uint8_t n);
+#endif
+    // use range beacon measurements to calculate a static position
+    void FuseRngBcnStatic();
+    
     // calculate the offset from EKF vertical position datum to the range beacon system datum
     void CalcRangeBeaconPosDownOffset(ftype obsVar, Vector3F &vehiclePosNED, bool aligning);
 
@@ -1445,7 +1448,6 @@ private:
             Vector3F beaconPosNED; // beacon NED position
         } *fusionReport;
         uint8_t numFusionReports;
-        uint32_t lastHealthReportMs;  // last time health status was sent to GCS
 
         AP_DAL &dal;
     } rngBcn{dal};

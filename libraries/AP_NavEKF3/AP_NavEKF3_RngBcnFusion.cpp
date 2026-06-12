@@ -56,7 +56,6 @@ void NavEKF3_core::BeaconFusion::InitialiseVariables()
     fusionMode = RngFusionMode::STATIC;
     mlatPassCount = 0;
     hdop = 0.0f;
-    lastHealthReportMs = 0;
 }
 
 /********************************************************
@@ -75,7 +74,7 @@ void NavEKF3_core::SelectRngBcnFusion()
         const bool isDead =
             (frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) &&
             rngBcn.alignmentCompleted &&
-            (imuSampleTime_ms - rngBcn.lastPassTime_ms) > 5000U;
+            (imuSampleTime_ms - rngBcn.lastPassTime_ms) > 5000U; // TODO: param
 
         if (isDead) {
             DoRngBcnRecovery();
@@ -101,22 +100,6 @@ void NavEKF3_core::SelectRngBcnFusion()
             FuseRngBcnStatic();
             // record that the beacon origin needs to be initialised
             rngBcn.originEstInit = false;
-        }
-    }
-
-    if (frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) {
-        if ((imuSampleTime_ms - rngBcn.lastHealthReportMs) > 5000U) {
-            rngBcn.lastHealthReportMs = imuSampleTime_ms;
-            const bool healthy = (imuSampleTime_ms - rngBcn.lastPassTime_ms) < 1000U;
-            if (!healthy) {
-                GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "RNG IMU%u: BAD", (unsigned)imu_index);
-            } else {
-                const char *mode =
-                    rngBcn.fusionMode == BeaconFusion::RngFusionMode::MLAT   ? "MLAT" :
-                    rngBcn.fusionMode == BeaconFusion::RngFusionMode::RANGE  ? "RANGE" :
-                                                                               "STATIC";
-                GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RNG IMU%u: %s", (unsigned)imu_index, mode);
-            }
         }
     }
 }
@@ -723,17 +706,16 @@ static constexpr ftype MLAT_MAX_HDOP = 5.0f; // TODO: move to param
 // Compute 2-D HDOP from the Fisher Information Matrix of unit-vector rows:
 //   H^T*H = [[hxx, hxy],[hxy, hyy]]
 //   HDOP  = sqrt(trace(inv(H^T*H))) = sqrt((hxx+hyy)/det)
-// Returns false when geometry is degenerate (< 2 valid beacons or collinear);
+// Returns false when geometry is degenerate (< 3 valid beacons or collinear);
 // returns true and writes the actual HDOP to `hdop` otherwise.
-static bool getHdop(const rng_bcn_elements *samples, uint8_t n,
-                    const Vector3F &pos, ftype &hdop)
+bool NavEKF3_core::GetHdop(const rng_bcn_elements *samples, uint8_t n)
 {
     ftype hxx = 0.0f, hyy = 0.0f, hxy = 0.0f;
     uint8_t valid = 0;
 
     for (uint8_t i = 0; i < n; i++) {
-        const ftype dx   = samples[i].bcnPosNED.x - pos.x;
-        const ftype dy   = samples[i].bcnPosNED.y - pos.y;
+        const ftype dx   = samples[i].beacon_posNED.x - rngBcn.receiverPos.x;
+        const ftype dy   = samples[i].beacon_posNED.y - rngBcn.receiverPos.y;
         const ftype norm = sqrtF(dx * dx + dy * dy);
         if (norm < 0.1f) {
             continue;
@@ -746,7 +728,7 @@ static bool getHdop(const rng_bcn_elements *samples, uint8_t n,
         valid++;
     }
 
-    if (valid < 2) {
+    if (valid < 3) {
         return false;
     }
 
@@ -755,17 +737,13 @@ static bool getHdop(const rng_bcn_elements *samples, uint8_t n,
         return false;  // collinear
     }
 
-    hdop = sqrtF((hxx + hyy) / det);
+    rngBcn.hdop = sqrtF((hxx + hyy) / det);
+
     return true;
 }
 
 // Number of successful MLAT passes required before the EKF position is reset.
 static constexpr uint8_t MLAT_REVIVE_PASSES      = 5; // TODO: move to param
-
-// Gradient-descent solver parameters.
-static constexpr ftype   MLAT_LEARNING_RATE      = 0.1f;   // tune to beacon scale
-static constexpr ftype   MLAT_TOLERANCE          = 1.f;    // m — convergence criterion
-static constexpr uint8_t MLAT_MAX_ITER           = 30;
 
 /*
   2-D gradient-descent MLAT solver, adapted from MLAT::solve().
@@ -785,11 +763,13 @@ struct MlatResult {
 };
 
 // TODO: 2D or 3D?
-static MlatResult solveMlat(const rng_bcn_elements *samples, uint8_t n,
-                             ftype anchorX, ftype anchorY)
+Vector2F NavEKF3_core::SolveMlat(const rng_bcn_elements *samples, uint8_t n, ftype& residualSq)
 {
-    ftype sx = anchorX, sy = anchorY;
-    ftype residualSq = 0.0f;
+    static constexpr ftype   MLAT_LEARNING_RATE      = 0.1f;   // tune to beacon scale
+    static constexpr ftype   MLAT_TOLERANCE          = 1.f;    // m — convergence criterion
+    static constexpr uint8_t MLAT_MAX_ITER           = 30;
+
+    ftype sx = rngBcn.receiverPos.x, sy = rngBcn.receiverPos.y;
 
     for (uint8_t iter = 0; iter < MLAT_MAX_ITER; iter++) {
         ftype gx = 0.0f, gy = 0.0f;
@@ -828,8 +808,7 @@ static MlatResult solveMlat(const rng_bcn_elements *samples, uint8_t n,
         sy = ny;
     }
 
-    // TODO: handle unsolvable case
-    return {sx, sy, residualSq};
+    return {sx, sy};
 }
 
 /*
@@ -864,29 +843,22 @@ void NavEKF3_core::DoRngBcnRecovery()
         if ((imuSampleTime_ms - beacon->beacon_last_update_ms(i)) > 1000U) {
             continue;
         }
-        samples[numSamples].beacon_posNED = beacon->beacon_position(i);
+        samples[numSamples].beacon_posNED = beacon->beacon_position(i).toftype();
         samples[numSamples].rng           = beacon->beacon_distance(i);
         numSamples++;
     }
 
-    if (!getHdop(samples, numSamples, rngBcn.receiverPos, rngBcn.hdop)) {
+    if (!GetHdop(samples, numSamples)) {
         return;
     }
 
     if (rngBcn.hdop >= MLAT_MAX_HDOP) {
-        GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
-                      "RNG IMU%u beacon HDOP %.1f >= MAX %.1f",
-                      (unsigned)imu_index,
-                      (double)rngBcn.hdop,
-                      (double)MLAT_MAX_HDOP);
         return;
     }
 
-    const MlatResult result = solveMlat(samples, numSamples,
-                                        rngBcn.receiverPos.x,
-                                        rngBcn.receiverPos.y);
+    ftype residualSq;
+    const auto result = SolveMlat(samples, numSamples, residualSq);
 
-    // TODO: if MLAT OK
     rngBcn.receiverPos.x = result.x;
     rngBcn.receiverPos.y = result.y;
     rngBcn.mlatPassCount++;
@@ -902,8 +874,10 @@ void NavEKF3_core::DoRngBcnRecovery()
         P[7][i] = P[i][7] = 0.0f;
         P[8][i] = P[i][8] = 0.0f;
     }
-    P[7][7] = result.residualSq;
-    P[8][8] = result.residualSq;
+
+    P[7][7] = residualSq;
+    P[8][8] = residualSq;
+
     ForceSymmetry();
     ConstrainVariances();
    
