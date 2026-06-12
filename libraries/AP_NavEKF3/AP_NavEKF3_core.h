@@ -749,7 +749,7 @@ private:
     void FuseRngBcnStatic();
 
     // multilateration position fix used to recover a dead ranging system
-    void FuseRngBcnMlat();
+    void DoRngBcnRecovery();
 
     // calculate the offset from EKF vertical position datum to the range beacon system datum
     void CalcRangeBeaconPosDownOffset(ftype obsVar, Vector3F &vehiclePosNED, bool aligning);
