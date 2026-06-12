@@ -54,7 +54,7 @@ void NavEKF3_core::BeaconFusion::InitialiseVariables()
     posOffsetNED.zero();
     originEstInit = false;
     fusionMode = RngFusionMode::STATIC;
-    mlatPassCount = 0;
+    recPassCount = 0;
     hdop = 0.0f;
 }
 
@@ -74,7 +74,7 @@ void NavEKF3_core::SelectRngBcnFusion()
         const bool isDead =
             (frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) &&
             rngBcn.alignmentCompleted &&
-            (imuSampleTime_ms - rngBcn.lastPassTime_ms) > 5000U; // TODO: param
+            (imuSampleTime_ms - rngBcn.lastPassTime_ms) > (uint32_t)(frontend->_rngBcnRecHoldoff_s * 1000U);
 
         if (isDead) {
             DoRngBcnRecovery();
@@ -701,7 +701,6 @@ void NavEKF3_core::CalcRangeBeaconPosDownOffset(ftype obsVar, Vector3F &vehicleP
     rngBcn.dataDelayed.beacon_posNED.z += rngBcn.posOffsetNED.z;
 }
 
-static constexpr ftype MLAT_MAX_HDOP = 5.0f; // TODO: move to param
 
 // Compute 2-D HDOP from the Fisher Information Matrix of unit-vector rows:
 //   H^T*H = [[hxx, hxy],[hxy, hyy]]
@@ -742,8 +741,6 @@ bool NavEKF3_core::GetHdop(const rng_bcn_elements *samples, uint8_t n)
     return true;
 }
 
-// Number of successful MLAT passes required before the EKF position is reset.
-static constexpr uint8_t MLAT_REVIVE_PASSES      = 5; // TODO: move to param
 
 /*
   2-D gradient-descent MLAT solver, adapted from MLAT::solve().
@@ -818,7 +815,7 @@ Vector2F NavEKF3_core::SolveMlat(const rng_bcn_elements *samples, uint8_t n, fty
     1. Collects fresh readings from all healthy beacons (<1s old).
     2. Validates geometry (co-linearity + HDOP check).
     3. Runs gradient-descent solver from the current rngBcn.receiverPos.
-    4. Updates rngBcn.receiverPos and increments mlatPassCount.
+    4. Updates rngBcn.receiverPos and increments recPassCount.
 
   After MLAT_REVIVE_PASSES consecutive successful passes, performs a soft EKF
   position reset and re-enters static-filter phase 2 so that FuseRngBcn() can
@@ -852,7 +849,7 @@ void NavEKF3_core::DoRngBcnRecovery()
         return;
     }
 
-    if (rngBcn.hdop >= MLAT_MAX_HDOP) {
+    if (rngBcn.hdop >= frontend->_rngBcnMaxHDOP) {
         return;
     }
 
@@ -861,9 +858,9 @@ void NavEKF3_core::DoRngBcnRecovery()
 
     rngBcn.receiverPos.x = result.x;
     rngBcn.receiverPos.y = result.y;
-    rngBcn.mlatPassCount++;
+    rngBcn.recPassCount++;
 
-    if (rngBcn.mlatPassCount < MLAT_REVIVE_PASSES) {
+    if (rngBcn.recPassCount < (uint8_t)frontend->_rngBcnRecPasses) {
         return;
     }
 
@@ -883,7 +880,7 @@ void NavEKF3_core::DoRngBcnRecovery()
    
     rngBcn.originEstInit   = false;
     rngBcn.lastPassTime_ms = imuSampleTime_ms;
-    rngBcn.mlatPassCount   = 0;
+    rngBcn.recPassCount   = 0;
 
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RNG IMU%u MLAT reset", (unsigned)imu_index);
 }
