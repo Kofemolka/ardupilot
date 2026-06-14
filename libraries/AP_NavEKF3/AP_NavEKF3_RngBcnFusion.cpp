@@ -132,12 +132,18 @@ void NavEKF3_core::FuseRngBcn()
     pn = stateStruct.position.x;
     pe = stateStruct.position.y;
     pd = stateStruct.position.z;
+
+    auto beacon_posNED = rngBcn.dataDelayed.beacon_posNED;
+
+    beacon_posNED.xy() += rngBcn.posOffsetNED.xy();
+
     bcn_pn = rngBcn.dataDelayed.beacon_posNED.x;
     bcn_pe = rngBcn.dataDelayed.beacon_posNED.y;
     bcn_pd = rngBcn.dataDelayed.beacon_posNED.z + rngBcn.posOffsetNED.z;
+    
 
     // predicted range
-    Vector3F deltaPosNED = stateStruct.position - rngBcn.dataDelayed.beacon_posNED;
+    Vector3F deltaPosNED = stateStruct.position - beacon_posNED;
     rngPred = deltaPosNED.length();
 
     // calculate measurement innovation
@@ -259,7 +265,7 @@ void NavEKF3_core::FuseRngBcn()
         }
 
         // Calculate innovation using the selected offset value
-        Vector3F delta = stateStruct.position - rngBcn.dataDelayed.beacon_posNED;
+        Vector3F delta = stateStruct.position - beacon_posNED;
         rngBcn.innov = delta.length() - rngBcn.dataDelayed.rng;
 
         // calculate the innovation consistency test ratio
@@ -325,7 +331,7 @@ void NavEKF3_core::FuseRngBcn()
         // Update the fusion report
         if (rngBcn.dataDelayed.beacon_ID < rngBcn.numFusionReports) {
             auto &report = rngBcn.fusionReport[rngBcn.dataDelayed.beacon_ID];
-            report.beaconPosNED = rngBcn.dataDelayed.beacon_posNED;
+            report.beaconPosNED = rngBcn.dataDelayed.beacon_posNED; // TODO: with offset or original?
             report.innov = rngBcn.innov;
             report.innovVar = rngBcn.varInnov;
             report.rng = rngBcn.dataDelayed.rng;
@@ -346,6 +352,9 @@ void NavEKF3_core::FuseRngBcnStatic()
     // get the estimated range measurement variance
     const ftype R_RNG = sq(MAX(rngBcn.dataDelayed.rngErr , 0.1f));
 
+    auto beacon_posNED = rngBcn.dataDelayed.beacon_posNED;
+    beacon_posNED.xy() += rngBcn.posOffsetNED.xy();
+
     /*
     The first thing to do is to check if we have started the alignment and if not, initialise the
     states and covariance to a first guess. To do this iterate through the available beacons and then
@@ -354,16 +363,16 @@ void NavEKF3_core::FuseRngBcnStatic()
     */
     if (!rngBcn.alignmentStarted) {
         if (rngBcn.dataDelayed.beacon_ID != rngBcn.lastIndex) {
-            rngBcn.posSum += rngBcn.dataDelayed.beacon_posNED;
+            rngBcn.posSum += beacon_posNED;
             rngBcn.lastIndex = rngBcn.dataDelayed.beacon_ID;
             rngBcn.sum += rngBcn.dataDelayed.rng;
             rngBcn.numMeas++;
 
             // capture the beacon vertical spread
-            if (rngBcn.dataDelayed.beacon_posNED.z > rngBcn.maxPosD) {
-                rngBcn.maxPosD = rngBcn.dataDelayed.beacon_posNED.z;
-            } else if(rngBcn.dataDelayed.beacon_posNED.z < rngBcn.minPosD) {
-                rngBcn.minPosD = rngBcn.dataDelayed.beacon_posNED.z;
+            if (beacon_posNED.z > rngBcn.maxPosD) {
+                rngBcn.maxPosD = beacon_posNED.z;
+            } else if(beacon_posNED.z < rngBcn.minPosD) {
+                rngBcn.minPosD = beacon_posNED.z;
             }
         }
         if (rngBcn.numMeas >= 100) {
@@ -446,9 +455,9 @@ void NavEKF3_core::FuseRngBcnStatic()
         }
 
         // calculate the observation jacobian
-        ftype t2 = rngBcn.dataDelayed.beacon_posNED.z - rngBcn.receiverPos.z + rngBcn.posOffsetNED.z;
-        ftype t3 = rngBcn.dataDelayed.beacon_posNED.y - rngBcn.receiverPos.y;
-        ftype t4 = rngBcn.dataDelayed.beacon_posNED.x - rngBcn.receiverPos.x;
+        ftype t2 = beacon_posNED.z - rngBcn.receiverPos.z + rngBcn.posOffsetNED.z;
+        ftype t3 = beacon_posNED.y - rngBcn.receiverPos.y;
+        ftype t4 = beacon_posNED.x - rngBcn.receiverPos.x;
         ftype t5 = t2*t2;
         ftype t6 = t3*t3;
         ftype t7 = t4*t4;
@@ -458,13 +467,13 @@ void NavEKF3_core::FuseRngBcnStatic()
             return;
         }
         ftype t9 = 1.0f/sqrtF(t8);
-        ftype t10 = rngBcn.dataDelayed.beacon_posNED.x*2.0f;
+        ftype t10 = beacon_posNED.x*2.0f;
         ftype t15 = rngBcn.receiverPos.x*2.0f;
         ftype t11 = t10-t15;
-        ftype t12 = rngBcn.dataDelayed.beacon_posNED.y*2.0f;
+        ftype t12 = beacon_posNED.y*2.0f;
         ftype t14 = rngBcn.receiverPos.y*2.0f;
         ftype t13 = t12-t14;
-        ftype t16 = rngBcn.dataDelayed.beacon_posNED.z*2.0f;
+        ftype t16 = beacon_posNED.z*2.0f;
         ftype t18 = rngBcn.receiverPos.z*2.0f;
         ftype t17 = t16-t18;
         ftype H_RNG[3];
@@ -496,7 +505,7 @@ void NavEKF3_core::FuseRngBcnStatic()
         K_RNG[2] = -t35*(t27+rngBcn.receiverPosCov[2][0]*t9*t11*0.5f+rngBcn.receiverPosCov[2][1]*t9*t13*0.5f);
 
         // calculate range measurement innovation
-        Vector3F deltaPosNED = rngBcn.receiverPos - rngBcn.dataDelayed.beacon_posNED;
+        Vector3F deltaPosNED = rngBcn.receiverPos - beacon_posNED;
         deltaPosNED.z -= rngBcn.posOffsetNED.z;
         rngBcn.innov = deltaPosNED.length() - rngBcn.dataDelayed.rng;
 
@@ -564,7 +573,7 @@ void NavEKF3_core::FuseRngBcnStatic()
         // Update the fusion report
         if (rngBcn.dataDelayed.beacon_ID < rngBcn.numFusionReports) {
             auto &report = rngBcn.fusionReport[rngBcn.dataDelayed.beacon_ID];
-            report.beaconPosNED = rngBcn.dataDelayed.beacon_posNED;
+            report.beaconPosNED = rngBcn.dataDelayed.beacon_posNED; // TODO: with offset or original?
             report.innov = rngBcn.innov;
             report.innovVar = rngBcn.varInnov;
             report.rng = rngBcn.dataDelayed.rng;
@@ -878,7 +887,7 @@ void NavEKF3_core::DoRngBcnRecovery()
     ForceSymmetry();
     ConstrainVariances();
    
-    rngBcn.originEstInit   = false;
+    // Check if needed with moving origin: rngBcn.originEstInit   = false;
     rngBcn.lastPassTime_ms = imuSampleTime_ms;
     rngBcn.recPassCount   = 0;
 

@@ -2250,7 +2250,7 @@ void NavEKF3_core::verifyTiltErrorVariance()
  */
 void NavEKF3_core::moveEKFOrigin(void)
 {
-    return; // TODO: no move until transition from GPS->BCN is fixed
+    // return; // TODO: no move until transition from GPS->BCN is fixed
 
     // only move origin when we have a origin and we're using GPS
     if (!frontend->common_origin_valid || !filterStatus.flags.using_gps) {
@@ -2267,6 +2267,8 @@ void NavEKF3_core::moveEKFOrigin(void)
     stateStruct.position.xy() += diffNE;
     outputDataNew.position.xy() += diffNE;
     outputDataDelayed.position.xy() += diffNE;
+    rngBcn.receiverPos.xy() += diffNE;
+    rngBcn.posOffsetNED.xy() += diffNE;
 
     for (unsigned index=0; index < imu_buffer_length; index++) {
         storedOutput[index].position.xy() += diffNE;
