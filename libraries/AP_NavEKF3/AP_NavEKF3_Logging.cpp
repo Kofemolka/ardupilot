@@ -277,25 +277,15 @@ void NavEKF3_core::Log_Write_Beacon(uint64_t time_us)
         posD : (int16_t)(100*rngBcn.receiverPos.z)
     };
     AP::logger().WriteBlock(&pkt10, sizeof(pkt10));
+
+    Log_Write_XKRB(time_us);
+
     rngBcn.fuseDataReportIndex++;
 }
 
 void NavEKF3_core::Log_Write_XKRB(uint64_t time_us)
 {
-    if (!statesInitialised || rngBcn.N == 0 || rngBcn.fusionReport == nullptr) {
-        return;
-    }
-
-    if (rngBcn.fuseDataReportIndex >= rngBcn.N ||
-        rngBcn.fuseDataReportIndex > rngBcn.numFusionReports) {
-        rngBcn.fuseDataReportIndex = 0;
-    }
-
     const auto &report = rngBcn.fusionReport[rngBcn.fuseDataReportIndex];
-    if (report.rng <= 0.0f) {
-        rngBcn.fuseDataReportIndex++;
-        return;
-    }
 
     const struct log_XKRB pkt{
         LOG_PACKET_HEADER_INIT(LOG_XKRB_MSG),
@@ -310,7 +300,6 @@ void NavEKF3_core::Log_Write_XKRB(uint64_t time_us)
         health  : rngBcn.health ? 1u : 0u,
     };
     AP::logger().WriteBlock(&pkt, sizeof(pkt));
-    rngBcn.fuseDataReportIndex++;
 }
 
 void NavEKF3_core::Log_Write_RngBcnPos(uint64_t time_us)
@@ -456,7 +445,6 @@ void NavEKF3_core::Log_Write(uint64_t time_us)
 #if EK3_FEATURE_BEACON_FUSION
     // write range beacon fusion debug packet if the range value is non-zero
     Log_Write_Beacon(time_us);
-    Log_Write_XKRB(time_us);
     Log_Write_RngBcnPos(time_us);
 #endif
 
