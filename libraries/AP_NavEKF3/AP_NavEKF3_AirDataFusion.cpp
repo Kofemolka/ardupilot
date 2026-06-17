@@ -1,7 +1,26 @@
 #include <AP_HAL/AP_HAL.h>
+#include <cstdlib>
 
 #include "AP_NavEKF3.h"
 #include "AP_NavEKF3_core.h"
+#include <cstdio>
+
+namespace {
+FILE *ekf3_att_debug_file()
+{
+    // Opt-in via env var so default flights are clean (heavy logging stalls the
+    // real-time loop and distorts the trajectory). Set EK3_ATT_DEBUG=1 to enable.
+    static const bool _ek3_att_dbg_enabled = (std::getenv("EK3_ATT_DEBUG") != nullptr);
+    if (!_ek3_att_dbg_enabled) { return nullptr; }
+    static FILE *fp = nullptr;
+    if (fp == nullptr) {
+        fp = std::fopen("/home/mbublyk/Documents/ardu/estimator_files/ardupilot_ekf3_att_debug.log", "a");
+
+        if (fp != nullptr) { static char ek3buf[1*1024*1024]; std::setvbuf(fp, ek3buf, _IOFBF, sizeof(ek3buf)); std::atexit([](){ std::fflush(nullptr); }); }
+    }
+    return fp;
+}
+}
 #include <AP_DAL/AP_DAL.h>
 
 /********************************************************
@@ -406,11 +425,34 @@ void NavEKF3_core::FuseSideslip()
         // calculate predicted sideslip angle and innovation using small angle approximation
         innovBeta = constrain_ftype(vel_rel_wind.y / vel_rel_wind.x, -0.5f, 0.5f);
 
+        const auto quat_before_update = stateStruct.quat;
+        Vector3F rpy_before_update;
+        quat_before_update.to_euler(rpy_before_update.x, rpy_before_update.y, rpy_before_update.z);
         // correct the state vector
         for (uint8_t j= 0; j<=stateIndexLim; j++) {
             statesArray[j] = statesArray[j] - Kfusion[j] * innovBeta;
         }
         stateStruct.quat.normalize();
+        Vector3F rpy_after_update;
+        stateStruct.quat.to_euler(rpy_after_update.x, rpy_after_update.y, rpy_after_update.z);
+        if (FILE *fp = ekf3_att_debug_file()) {
+            std::fprintf(
+                fp,
+                "EK3_ATT_BETA ts_ms=%lu time_us=%llu core=%u imu=%u innov=%.9g accepted=1 windOnly=%u vel_rel_wind=(%.9g,%.9g,%.9g) Kq=(%.9g,%.9g,%.9g,%.9g) quat_before=(%.9g,%.9g,%.9g,%.9g) quat_after=(%.9g,%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) drpy=(%.9g,%.9g,%.9g)\n",
+                (unsigned long)imuSampleTime_ms,
+                (unsigned long long)imuDataDelayed.time_ms,
+                (unsigned)core_index,
+                (unsigned)imu_index,
+                (double)innovBeta,
+                airDataFusionWindOnly ? 1U : 0U,
+                (double)vel_rel_wind.x, (double)vel_rel_wind.y, (double)vel_rel_wind.z,
+                (double)Kfusion[0], (double)Kfusion[1], (double)Kfusion[2], (double)Kfusion[3],
+                (double)quat_before_update[0], (double)quat_before_update[1], (double)quat_before_update[2], (double)quat_before_update[3],
+                (double)stateStruct.quat[0], (double)stateStruct.quat[1], (double)stateStruct.quat[2], (double)stateStruct.quat[3],
+                (double)rpy_before_update.x, (double)rpy_before_update.y, (double)rpy_before_update.z,
+                (double)rpy_after_update.x, (double)rpy_after_update.y, (double)rpy_after_update.z,
+                (double)(rpy_after_update.x-rpy_before_update.x), (double)(rpy_after_update.y-rpy_before_update.y), (double)(rpy_after_update.z-rpy_before_update.z));
+        }
 
         // correct the covariance P = (I - K*H)*P = P - K*H*P. take advantage of
         // the zero elements of H to reduce the number of operations.

@@ -15,6 +15,7 @@
 #include <AP_CustomRotations/AP_CustomRotations.h>
 #include <GCS_MAVLink/GCS.h>
 #include <AP_AHRS/AP_AHRS.h>
+#include <AP_EstimatorIpcServer/AP_EstimatorIpcServer.h>
 
 #include "AP_Compass_config.h"
 
@@ -1875,6 +1876,20 @@ Compass::read(void)
         }
     }
     const bool new_healthy = healthy();
+
+    for (uint8_t i = 0; i < get_count(); i++) {
+        const bool inst_healthy = healthy(i);
+        const Vector3f &field = get_field(i);
+        const Vector3f &offsets = get_offsets(i);
+        const bool calibrated = !offsets.is_zero();
+        Estimator::Ipc::AP_EstimatorIpcServer::getSingleton().sendMagnetometer(
+            AP_HAL::micros64(),
+            i,
+            field,
+            offsets,
+            inst_healthy,
+            calibrated);
+    }
 
 #if HAL_LOGGING_ENABLED
 

@@ -2,14 +2,14 @@
 ## Main
 
 # beacon type = Sine
-BCN_TYPE,4
+BCN_TYPE,0
 
 ## EKF source set
 EK3_SRC_OPTIONS,0
 
-EK3_SRC1_POSXY,4
+EK3_SRC1_POSXY,3
 EK3_SRC1_POSZ,1
-EK3_SRC1_VELXY,0
+EK3_SRC1_VELXY,3
 EK3_SRC1_VELZ,0
 EK3_SRC1_YAW,1
 
@@ -19,21 +19,24 @@ GPS2_TYPE,100
 # Primary
 GPS_AUTO_SWITCH,1
 
-# GPS enabled at boot; test script disables it later at runtime
+# No GPS
 GPS1_TYPE,1
 
 ## -------------------------------------------
 ## Tuning
 
 # Beacon measurement noise
-EK3_BCN_M_NSE,150
+EK3_BCN_M_NSE,50
 
 # Innovation gate width, %
-EK3_BCN_I_GTE,200
+EK3_BCN_I_GTE,1000
 
 # Stabilization
 ATC_RATE_P_MAX,90
 ATC_RATE_R_MAX,90
+
+# Wind process noise
+EK3_WIND_P_NSE,0.5
 
 ## -------------------------------------------
 ## Debug behavior
@@ -52,3 +55,5 @@ EK3_IMU_MASK,1
 
 # TODO
 # FS_EKF_THRESH,0
+# IMU-rate experiment: log IMU at loop rate
+SCHED_LOOP_RATE,400

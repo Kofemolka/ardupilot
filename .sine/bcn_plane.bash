@@ -2,9 +2,8 @@
 
 set -e
 
-cd ..
-
-source .env/bin/activate
+#cd ..
+#source .env/bin/activate
 
 PARAM_FILE="$(realpath .sine/sine_beacons_plane.param)"
 

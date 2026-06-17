@@ -1,4 +1,5 @@
 #include <AP_HAL/AP_HAL.h>
+#include <cstdlib>
 
 #include "AP_NavEKF3.h"
 #include "AP_NavEKF3_core.h"
@@ -7,6 +8,24 @@
 #include <AP_PipeDash/AP_PipeDash.h>
 #include <AP_VisualOdom/AP_VisualOdom.h>
 #include <GCS_MAVLink/GCS.h>
+#include <cstdio>
+
+namespace {
+FILE *ekf3_att_debug_file()
+{
+    // Opt-in via env var so default flights are clean (heavy logging stalls the
+    // real-time loop and distorts the trajectory). Set EK3_ATT_DEBUG=1 to enable.
+    static const bool _ek3_att_dbg_enabled = (std::getenv("EK3_ATT_DEBUG") != nullptr);
+    if (!_ek3_att_dbg_enabled) { return nullptr; }
+  static FILE *fp = nullptr;
+  if (fp == nullptr) {
+    fp = std::fopen("/home/mbublyk/Documents/ardu/estimator_files/ardupilot_ekf3_att_debug.log", "a");
+
+    if (fp != nullptr) { static char ek3buf[1*1024*1024]; std::setvbuf(fp, ek3buf, _IOFBF, sizeof(ek3buf)); std::atexit([](){ std::fflush(nullptr); }); }
+  }
+  return fp;
+}
+}
 
 // constructor
 NavEKF3_core::NavEKF3_core(NavEKF3 *_frontend, AP_DAL &_dal)
@@ -763,12 +782,22 @@ void NavEKF3_core::correctDeltaVelocity(Vector3F &delVel, ftype delVelDT,
  * attitude error is then used to correct the quaternion.
  */
 void NavEKF3_core::UpdateStrapdownEquationsNED() {
+  const Vector3F raw_delAng = imuDataDelayed.delAng;
+  const Vector3F raw_delVel = imuDataDelayed.delVel;
+  const Vector3F gyro_bias_used = inactiveBias[imuDataDelayed.gyro_index].gyro_bias * (imuDataDelayed.delAngDT / dtEkfAvg);
+  const Vector3F accel_bias_used = inactiveBias[imuDataDelayed.accel_index].accel_bias * (imuDataDelayed.delVelDT / dtEkfAvg);
+  const Vector3F earth_rate_body = prevTnb * earthRateNED * imuDataDelayed.delAngDT;
+  const Vector3F corrected_rotvec = delAngCorrected - earth_rate_body;
+  const auto quat_before = stateStruct.quat;
+  Vector3F rpy_before;
+  quat_before.to_euler(rpy_before.x, rpy_before.y, rpy_before.z);
+  const Matrix3F prevTnb_before = prevTnb;
+
   // update the quaternion states by rotating from the previous attitude through
   // the delta angle rotation quaternion and normalise
   // apply correction for earth's rotation rate
   // % * - and + operators have been overloaded
-  stateStruct.quat.rotate(delAngCorrected -
-                          prevTnb * earthRateNED * imuDataDelayed.delAngDT);
+  stateStruct.quat.rotate(corrected_rotvec);
 
   stateStruct.quat.normalize();
 
@@ -778,10 +807,50 @@ void NavEKF3_core::UpdateStrapdownEquationsNED() {
   // * and + operators have been overloaded
   Vector3F delVelNav; // delta velocity vector in earth axes
   delVelNav = prevTnb.mul_transpose(delVelCorrected);
+  const Vector3F delVelNav_before_gravity = delVelNav;
   delVelNav.z += GRAVITY_MSS * imuDataDelayed.delVelDT;
 
   // calculate the nav to body cosine matrix
   stateStruct.quat.inverse().rotation_matrix(prevTnb);
+  const auto quat_after = stateStruct.quat;
+  Vector3F rpy_after;
+  quat_after.to_euler(rpy_after.x, rpy_after.y, rpy_after.z);
+  if (FILE *fp = ekf3_att_debug_file()) {
+    std::fprintf(
+        fp,
+        "EK3_ATT_PRED ts_ms=%lu time_us=%llu core=%u imu=%u gyro_idx=%u accel_idx=%u dt_ang=%.9g dt_vel=%.9g raw_delAng=(%.9g,%.9g,%.9g) raw_delVel=(%.9g,%.9g,%.9g) gyro_bias_used=(%.9g,%.9g,%.9g) accel_bias_used=(%.9g,%.9g,%.9g) delAngCorrected=(%.9g,%.9g,%.9g) delVelCorrected=(%.9g,%.9g,%.9g) earthRateNED=(%.9g,%.9g,%.9g) earthRateBody=(%.9g,%.9g,%.9g) corrected_rotvec=(%.9g,%.9g,%.9g) quat_before=(%.9g,%.9g,%.9g,%.9g) quat_after=(%.9g,%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) delVelNav_before_g=(%.9g,%.9g,%.9g) delVelNav_after_g=(%.9g,%.9g,%.9g) prevTnb_before_row0=(%.9g,%.9g,%.9g) prevTnb_before_row1=(%.9g,%.9g,%.9g) prevTnb_before_row2=(%.9g,%.9g,%.9g) prevTnb_after_row0=(%.9g,%.9g,%.9g) prevTnb_after_row1=(%.9g,%.9g,%.9g) prevTnb_after_row2=(%.9g,%.9g,%.9g) vel_before=(%.9g,%.9g,%.9g) pos_before=(%.9g,%.9g,%.9g)\n",
+        (unsigned long)imuSampleTime_ms,
+        (unsigned long long)imuDataDelayed.time_ms,
+        (unsigned)core_index,
+        (unsigned)imu_index,
+        (unsigned)imuDataDelayed.gyro_index,
+        (unsigned)imuDataDelayed.accel_index,
+        (double)imuDataDelayed.delAngDT,
+        (double)imuDataDelayed.delVelDT,
+        (double)raw_delAng.x, (double)raw_delAng.y, (double)raw_delAng.z,
+        (double)raw_delVel.x, (double)raw_delVel.y, (double)raw_delVel.z,
+        (double)gyro_bias_used.x, (double)gyro_bias_used.y, (double)gyro_bias_used.z,
+        (double)accel_bias_used.x, (double)accel_bias_used.y, (double)accel_bias_used.z,
+        (double)delAngCorrected.x, (double)delAngCorrected.y, (double)delAngCorrected.z,
+        (double)delVelCorrected.x, (double)delVelCorrected.y, (double)delVelCorrected.z,
+        (double)earthRateNED.x, (double)earthRateNED.y, (double)earthRateNED.z,
+        (double)earth_rate_body.x, (double)earth_rate_body.y, (double)earth_rate_body.z,
+        (double)corrected_rotvec.x, (double)corrected_rotvec.y, (double)corrected_rotvec.z,
+        (double)quat_before[0], (double)quat_before[1], (double)quat_before[2], (double)quat_before[3],
+        (double)quat_after[0], (double)quat_after[1], (double)quat_after[2], (double)quat_after[3],
+        (double)rpy_before.x, (double)rpy_before.y, (double)rpy_before.z,
+        (double)rpy_after.x, (double)rpy_after.y, (double)rpy_after.z,
+        (double)delVelNav_before_gravity.x, (double)delVelNav_before_gravity.y, (double)delVelNav_before_gravity.z,
+        (double)delVelNav.x, (double)delVelNav.y, (double)delVelNav.z,
+        (double)prevTnb_before.a.x, (double)prevTnb_before.a.y, (double)prevTnb_before.a.z,
+        (double)prevTnb_before.b.x, (double)prevTnb_before.b.y, (double)prevTnb_before.b.z,
+        (double)prevTnb_before.c.x, (double)prevTnb_before.c.y, (double)prevTnb_before.c.z,
+        (double)prevTnb.a.x, (double)prevTnb.a.y, (double)prevTnb.a.z,
+        (double)prevTnb.b.x, (double)prevTnb.b.y, (double)prevTnb.b.z,
+        (double)prevTnb.c.x, (double)prevTnb.c.y, (double)prevTnb.c.z,
+        (double)stateStruct.velocity.x, (double)stateStruct.velocity.y, (double)stateStruct.velocity.z,
+        (double)stateStruct.position.x, (double)stateStruct.position.y, (double)stateStruct.position.z);
+  }
 
   // calculate the rate of change of velocity (used for launch detect and other
   // functions)
@@ -820,6 +889,61 @@ void NavEKF3_core::UpdateStrapdownEquationsNED() {
 
   // limit states to protect against divergence
   ConstrainStates();
+
+  if (FILE *fp = ekf3_att_debug_file()) {
+    Vector3F state_rpy;
+    stateStruct.quat.to_euler(state_rpy.x, state_rpy.y, state_rpy.z);
+    std::fprintf(
+        fp,
+        "EK3_STATE ts_ms=%lu time_us=%llu core=%u imu=%u phase=post_predict quat=(%.9g,%.9g,%.9g,%.9g) rpy=(%.9g,%.9g,%.9g) pos=(%.9g,%.9g,%.9g) vel=(%.9g,%.9g,%.9g) gyro_bias=(%.9g,%.9g,%.9g) accel_bias=(%.9g,%.9g,%.9g) earth_mag=(%.9g,%.9g,%.9g) body_mag=(%.9g,%.9g,%.9g) wind_vel=(%.9g,%.9g) P_att=(%.9g,%.9g,%.9g) P_gyro_bias=(%.9g,%.9g,%.9g) P_accel_bias=(%.9g,%.9g,%.9g) P_earth_mag=(%.9g,%.9g,%.9g) P_body_mag=(%.9g,%.9g,%.9g) P_wind=(%.9g,%.9g)\n",
+        (unsigned long)imuSampleTime_ms,
+        (unsigned long long)imuDataDelayed.time_ms,
+        (unsigned)core_index,
+        (unsigned)imu_index,
+        (double)stateStruct.quat[0], (double)stateStruct.quat[1], (double)stateStruct.quat[2], (double)stateStruct.quat[3],
+        (double)state_rpy.x, (double)state_rpy.y, (double)state_rpy.z,
+        (double)stateStruct.position.x, (double)stateStruct.position.y, (double)stateStruct.position.z,
+        (double)stateStruct.velocity.x, (double)stateStruct.velocity.y, (double)stateStruct.velocity.z,
+        (double)stateStruct.gyro_bias.x, (double)stateStruct.gyro_bias.y, (double)stateStruct.gyro_bias.z,
+        (double)stateStruct.accel_bias.x, (double)stateStruct.accel_bias.y, (double)stateStruct.accel_bias.z,
+        (double)stateStruct.earth_magfield.x, (double)stateStruct.earth_magfield.y, (double)stateStruct.earth_magfield.z,
+        (double)stateStruct.body_magfield.x, (double)stateStruct.body_magfield.y, (double)stateStruct.body_magfield.z,
+        (double)stateStruct.wind_vel.x, (double)stateStruct.wind_vel.y,
+        (double)P[0][0], (double)P[1][1], (double)P[2][2],
+        (double)P[10][10], (double)P[11][11], (double)P[12][12],
+        (double)P[13][13], (double)P[14][14], (double)P[15][15],
+        (double)P[16][16], (double)P[17][17], (double)P[18][18],
+        (double)P[19][19], (double)P[20][20], (double)P[21][21],
+        (double)P[22][22], (double)P[23][23]);
+
+    std::fprintf(
+        fp,
+        "EK3_FLAGS ts_ms=%lu time_us=%llu core=%u imu=%u tiltAlignComplete=%u yawAlignComplete=%u finalInflightYawInit=%u finalInflightMagInit=%u magFieldLearned=%u magStateInitComplete=%u inhibitDelAngBiasStates=%u inhibitDelVelBiasStates=%u inhibitMagStates=%u inhibitWindStates=%u onGround=%u inFlight=%u manoeuvring=%u magHealth=%u allMagSensorsFailed=%u magYawResetRequest=%u magStateResetRequest=%u gpsYawResetRequest=%u stateIndexLim=%u PV_AidingMode=%u\n",
+        (unsigned long)imuSampleTime_ms,
+        (unsigned long long)imuDataDelayed.time_ms,
+        (unsigned)core_index,
+        (unsigned)imu_index,
+        (unsigned)tiltAlignComplete,
+        (unsigned)yawAlignComplete,
+        (unsigned)finalInflightYawInit,
+        (unsigned)finalInflightMagInit,
+        (unsigned)magFieldLearned,
+        (unsigned)magStateInitComplete,
+        (unsigned)inhibitDelAngBiasStates,
+        (unsigned)inhibitDelVelBiasStates,
+        (unsigned)inhibitMagStates,
+        (unsigned)inhibitWindStates,
+        (unsigned)onGround,
+        (unsigned)inFlight,
+        (unsigned)manoeuvring,
+        (unsigned)magHealth,
+        (unsigned)allMagSensorsFailed,
+        (unsigned)magYawResetRequest,
+        (unsigned)magStateResetRequest,
+        (unsigned)gpsYawResetRequest,
+        (unsigned)stateIndexLim,
+        (unsigned)PV_AidingMode);
+  }
 
 #if EK3_FEATURE_BEACON_FUSION
   // If main filter velocity states are valid, update the range beacon receiver
@@ -980,6 +1104,24 @@ void NavEKF3_core::calcOutputStates() {
     // calculate a correction to the delta angle
     // that will cause the INS to track the EKF quaternions
     delAngCorrection = deltaAngErr * errorGain * dtIMUavg;
+    if (FILE *fp = ekf3_att_debug_file()) {
+      Vector3F out_rpy_before, ekf_rpy;
+      outputDataDelayed.quat.to_euler(out_rpy_before.x, out_rpy_before.y, out_rpy_before.z);
+      stateStruct.quat.to_euler(ekf_rpy.x, ekf_rpy.y, ekf_rpy.z);
+      std::fprintf(
+          fp,
+          "EK3_ATT_OUT ts_ms=%lu time_us=%llu core=%u imu=%u quat_err=(%.9g,%.9g,%.9g,%.9g) deltaAngErr=(%.9g,%.9g,%.9g) delAngCorrection=(%.9g,%.9g,%.9g) errorGain=%.9g timeDelay=%.9g out_rpy=(%.9g,%.9g,%.9g) ekf_rpy=(%.9g,%.9g,%.9g)\n",
+          (unsigned long)imuSampleTime_ms,
+          (unsigned long long)imuDataDelayed.time_ms,
+          (unsigned)core_index,
+          (unsigned)imu_index,
+          (double)quatErr[0], (double)quatErr[1], (double)quatErr[2], (double)quatErr[3],
+          (double)deltaAngErr.x, (double)deltaAngErr.y, (double)deltaAngErr.z,
+          (double)delAngCorrection.x, (double)delAngCorrection.y, (double)delAngCorrection.z,
+          (double)errorGain, (double)timeDelay,
+          (double)out_rpy_before.x, (double)out_rpy_before.y, (double)out_rpy_before.z,
+          (double)ekf_rpy.x, (double)ekf_rpy.y, (double)ekf_rpy.z);
+    }
 
     // calculate velocity and position tracking errors
     Vector3F velErr = (stateStruct.velocity - outputDataDelayed.velocity);
@@ -2542,6 +2684,10 @@ void NavEKF3_core::setYawFromMag() {
     return;
   }
 
+  Vector3F rpy_before;
+  stateStruct.quat.to_euler(rpy_before.x, rpy_before.y, rpy_before.z);
+  const QuaternionF quat_before = stateStruct.quat;
+
   // read the magnetometer data
   readMagData();
 
@@ -2570,6 +2716,28 @@ void NavEKF3_core::setYawFromMag() {
   // update quaternion states and covariances
   resetQuatStateYawOnly(yawAngMeasured, sq(MAX(frontend->_yawNoise, 1.0e-2f)),
                         order);
+
+  Vector3F rpy_after;
+  stateStruct.quat.to_euler(rpy_after.x, rpy_after.y, rpy_after.z);
+  if (FILE *fp = ekf3_att_debug_file()) {
+    std::fprintf(
+        fp,
+        "EK3_ATT_SETYAW_MAG ts_ms=%lu time_us=%llu core=%u imu=%u order=%u mag_body=(%.9g,%.9g,%.9g) mag_ned_tilt=(%.9g,%.9g,%.9g) decl=%.9g yaw_meas=%.9g quat_before=(%.9g,%.9g,%.9g,%.9g) quat_after=(%.9g,%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) drpy=(%.9g,%.9g,%.9g)\n",
+        (unsigned long)imuSampleTime_ms,
+        (unsigned long long)imuDataDelayed.time_ms,
+        (unsigned)core_index,
+        (unsigned)imu_index,
+        (unsigned)order,
+        (double)magDataDelayed.mag.x, (double)magDataDelayed.mag.y, (double)magDataDelayed.mag.z,
+        (double)magMeasNED.x, (double)magMeasNED.y, (double)magMeasNED.z,
+        (double)MagDeclination(),
+        (double)yawAngMeasured,
+        (double)quat_before[0], (double)quat_before[1], (double)quat_before[2], (double)quat_before[3],
+        (double)stateStruct.quat[0], (double)stateStruct.quat[1], (double)stateStruct.quat[2], (double)stateStruct.quat[3],
+        (double)rpy_before.x, (double)rpy_before.y, (double)rpy_before.z,
+        (double)rpy_after.x, (double)rpy_after.y, (double)rpy_after.z,
+        (double)(rpy_after.x-rpy_before.x), (double)(rpy_after.y-rpy_before.y), (double)(rpy_after.z-rpy_before.z));
+  }
 }
 
 // update mag field states and associated variances using magnetomer and

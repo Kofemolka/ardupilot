@@ -200,6 +200,32 @@ void AP_EstimatorIpcServer::sendGPS(uint64_t ts, const AP_GPS::GPS_State& state,
     sendBuffer(sizeof(msg));
 }
 
+void AP_EstimatorIpcServer::sendMagnetometer(uint64_t ts, uint8_t instance, const Vector3f& field_mgauss, const Vector3f& offsets_mgauss, bool healthy, bool calibrated)
+{
+    using namespace Estimator::Types;
+    if (!m_impl->ready || !m_impl->peer_valid) {
+        return;
+    }
+
+    static_assert(sizeof(Magnetometer) <= c_buf_size, "Magnetometer too large");
+
+    Magnetometer msg = {};
+    msg.ts = ts;
+    msg.type = static_cast<uint8_t>(EType::Magnetometer);
+    msg.instance = instance;
+    msg.x = field_mgauss.x;
+    msg.y = field_mgauss.y;
+    msg.z = field_mgauss.z;
+    msg.ofs_x = offsets_mgauss.x;
+    msg.ofs_y = offsets_mgauss.y;
+    msg.ofs_z = offsets_mgauss.z;
+    msg.healthy = healthy;
+    msg.calibrated = calibrated;
+
+    std::memcpy(m_impl->buffer, &msg, sizeof(msg));
+    sendBuffer(sizeof(msg));
+}
+
 bool AP_EstimatorIpcServer::sendBuffer(std::size_t n)
 {
     if (!m_impl->ready || !m_impl->peer_valid) {

@@ -1,9 +1,28 @@
 #include "AP_NavEKF3.h"
+#include <cstdlib>
 #include "AP_NavEKF3_core.h"
 
 #if EK3_FEATURE_BEACON_FUSION
 
 #include <AP_DAL/AP_DAL.h>
+#include <cstdio>
+
+namespace {
+FILE *ekf3_att_debug_file()
+{
+    // Opt-in via env var so default flights are clean (heavy logging stalls the
+    // real-time loop and distorts the trajectory). Set EK3_ATT_DEBUG=1 to enable.
+    static const bool _ek3_att_dbg_enabled = (std::getenv("EK3_ATT_DEBUG") != nullptr);
+    if (!_ek3_att_dbg_enabled) { return nullptr; }
+  static FILE *fp = nullptr;
+  if (fp == nullptr) {
+    fp = std::fopen("/home/mbublyk/Documents/ardu/estimator_files/ardupilot_ekf3_att_debug.log", "a");
+
+    if (fp != nullptr) { static char ek3buf[1*1024*1024]; std::setvbuf(fp, ek3buf, _IOFBF, sizeof(ek3buf)); std::atexit([](){ std::fflush(nullptr); }); }
+  }
+  return fp;
+}
+}
 
 // initialise state:
 void NavEKF3_core::BeaconFusion::InitialiseVariables() {
@@ -286,8 +305,92 @@ void NavEKF3_core::FuseRngBcn() {
         (sq(MAX(0.01f * (ftype)frontend->_rngBcnInnovGate, 1.0f)) *
          rngBcn.varInnov);
 
+    const ftype ph_pos_abs_sum =
+        fabsF(P[7][7] * t4 * t9 + P[7][8] * t3 * t9 + P[7][9] * t2 * t9) +
+        fabsF(P[8][7] * t4 * t9 + P[8][8] * t3 * t9 + P[8][9] * t2 * t9) +
+        fabsF(P[9][7] * t4 * t9 + P[9][8] * t3 * t9 + P[9][9] * t2 * t9);
+    const ftype ph_vel_abs_sum =
+        fabsF(P[4][7] * t4 * t9 + P[4][8] * t3 * t9 + P[4][9] * t2 * t9) +
+        fabsF(P[5][7] * t4 * t9 + P[5][8] * t3 * t9 + P[5][9] * t2 * t9) +
+        fabsF(P[6][7] * t4 * t9 + P[6][8] * t3 * t9 + P[6][9] * t2 * t9);
+    const ftype ph_att_abs_sum =
+        fabsF(P[0][7] * t4 * t9 + P[0][8] * t3 * t9 + P[0][9] * t2 * t9) +
+        fabsF(P[1][7] * t4 * t9 + P[1][8] * t3 * t9 + P[1][9] * t2 * t9) +
+        fabsF(P[2][7] * t4 * t9 + P[2][8] * t3 * t9 + P[2][9] * t2 * t9) +
+        fabsF(P[3][7] * t4 * t9 + P[3][8] * t3 * t9 + P[3][9] * t2 * t9);
+    const ftype ph_gyro_bias_abs_sum =
+        fabsF(P[10][7] * t4 * t9 + P[10][8] * t3 * t9 + P[10][9] * t2 * t9) +
+        fabsF(P[11][7] * t4 * t9 + P[11][8] * t3 * t9 + P[11][9] * t2 * t9) +
+        fabsF(P[12][7] * t4 * t9 + P[12][8] * t3 * t9 + P[12][9] * t2 * t9);
+    const ftype ph_accel_bias_abs_sum =
+        fabsF(P[13][7] * t4 * t9 + P[13][8] * t3 * t9 + P[13][9] * t2 * t9) +
+        fabsF(P[14][7] * t4 * t9 + P[14][8] * t3 * t9 + P[14][9] * t2 * t9) +
+        fabsF(P[15][7] * t4 * t9 + P[15][8] * t3 * t9 + P[15][9] * t2 * t9);
+    const ftype k_pos_abs_sum = fabsF(Kfusion[7]) + fabsF(Kfusion[8]) + fabsF(Kfusion[9]);
+    const ftype k_vel_abs_sum = fabsF(Kfusion[4]) + fabsF(Kfusion[5]) + fabsF(Kfusion[6]);
+    const ftype k_att_abs_sum = fabsF(Kfusion[0]) + fabsF(Kfusion[1]) + fabsF(Kfusion[2]) + fabsF(Kfusion[3]);
+    const ftype k_gyro_bias_abs_sum = fabsF(Kfusion[10]) + fabsF(Kfusion[11]) + fabsF(Kfusion[12]);
+    const ftype k_accel_bias_abs_sum = fabsF(Kfusion[13]) + fabsF(Kfusion[14]) + fabsF(Kfusion[15]);
+
     // fail if the ratio is > 1, but don't fail if bad IMU data
     rngBcn.health = ((rngBcn.testRatio < 1.0f) || badIMUdata);
+
+    if (FILE *fp = ekf3_att_debug_file()) {
+      std::fprintf(
+          fp,
+          "EK3_BCN ts_ms=%lu time_us=%llu core=%u imu=%u stage=main beacon_id=%u accepted=%u primary=%u active_hgt_beacon=%u innov=%.9g varInnov=%.9g testRatio=%.9g rng_meas=%.9g rng_pred=%.9g R=%.9g speed_xy=%.9g pos=(%.9g,%.9g,%.9g) beacon_pos=(%.9g,%.9g,%.9g) inhibitDelAngBiasStates=%u inhibitDelVelBiasStates=%u inhibitMagStates=%u stateIndexLim=%u PV_AidingMode=%u\n",
+          (unsigned long)imuSampleTime_ms,
+          (unsigned long long)imuDataDelayed.time_ms,
+          (unsigned)core_index,
+          (unsigned)imu_index,
+          (unsigned)rngBcn.dataDelayed.beacon_ID,
+          (unsigned)rngBcn.health,
+          (unsigned)((frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) && rngBcn.alignmentCompleted),
+          (unsigned)(activeHgtSource == AP_NavEKF_Source::SourceZ::BEACON),
+          (double)rngBcn.innov,
+          (double)rngBcn.varInnov,
+          (double)rngBcn.testRatio,
+          (double)rngBcn.dataDelayed.rng,
+          (double)rngPred,
+          (double)R_BCN,
+          (double)stateStruct.velocity.xy().length(),
+          (double)stateStruct.position.x, (double)stateStruct.position.y, (double)stateStruct.position.z,
+          (double)rngBcn.dataDelayed.beacon_posNED.x, (double)rngBcn.dataDelayed.beacon_posNED.y, (double)(rngBcn.dataDelayed.beacon_posNED.z + rngBcn.posOffsetNED.z),
+          (unsigned)inhibitDelAngBiasStates,
+          (unsigned)inhibitDelVelBiasStates,
+          (unsigned)inhibitMagStates,
+          (unsigned)stateIndexLim,
+          (unsigned)PV_AidingMode);
+      std::fprintf(
+          fp,
+          "EK3_BCN_INT ts_ms=%lu time_us=%llu core=%u imu=%u beacon_id=%u active_hgt_beacon=%u innov=%.9g varInnov=%.9g testRatio=%.9g Hpos=(%.9g,%.9g,%.9g) PH_pos=%.9g PH_vel=%.9g PH_att=%.9g PH_gyro=%.9g PH_accel=%.9g K_pos=%.9g K_vel=%.9g K_att=%.9g K_gyro=%.9g K_accel=%.9g inhibitDelAngBiasStates=%u inhibitDelVelBiasStates=%u inhibitMagStates=%u stateIndexLim=%u\n",
+          (unsigned long)imuSampleTime_ms,
+          (unsigned long long)imuDataDelayed.time_ms,
+          (unsigned)core_index,
+          (unsigned)imu_index,
+          (unsigned)rngBcn.dataDelayed.beacon_ID,
+          (unsigned)(activeHgtSource == AP_NavEKF_Source::SourceZ::BEACON),
+          (double)rngBcn.innov,
+          (double)rngBcn.varInnov,
+          (double)rngBcn.testRatio,
+          (double)H_BCN[7],
+          (double)H_BCN[8],
+          (double)H_BCN[9],
+          (double)ph_pos_abs_sum,
+          (double)ph_vel_abs_sum,
+          (double)ph_att_abs_sum,
+          (double)ph_gyro_bias_abs_sum,
+          (double)ph_accel_bias_abs_sum,
+          (double)k_pos_abs_sum,
+          (double)k_vel_abs_sum,
+          (double)k_att_abs_sum,
+          (double)k_gyro_bias_abs_sum,
+          (double)k_accel_bias_abs_sum,
+          (unsigned)inhibitDelAngBiasStates,
+          (unsigned)inhibitDelVelBiasStates,
+          (unsigned)inhibitMagStates,
+          (unsigned)stateIndexLim);
+    }
 
     // test the ratio before fusing data
     if (rngBcn.health) {
@@ -330,9 +433,68 @@ void NavEKF3_core::FuseRngBcn() {
         ForceSymmetry();
         ConstrainVariances();
 
+        const auto quat_before_update = stateStruct.quat;
+        const Vector3F pos_before = stateStruct.position;
+        const Vector3F vel_before = stateStruct.velocity;
+        const Vector3F gyro_bias_before(stateStruct.gyro_bias.x, stateStruct.gyro_bias.y, stateStruct.gyro_bias.z);
+        const Vector3F accel_bias_before(stateStruct.accel_bias.x, stateStruct.accel_bias.y, stateStruct.accel_bias.z);
+        Vector3F rpy_before_update;
+        quat_before_update.to_euler(rpy_before_update.x, rpy_before_update.y, rpy_before_update.z);
         // correct the state vector
         for (uint8_t j = 0; j <= stateIndexLim; j++) {
           statesArray[j] = statesArray[j] - Kfusion[j] * rngBcn.innov;
+        }
+        stateStruct.quat.normalize();
+        const Vector3F pos_after = stateStruct.position;
+        const Vector3F vel_after = stateStruct.velocity;
+        const Vector3F gyro_bias_after(stateStruct.gyro_bias.x, stateStruct.gyro_bias.y, stateStruct.gyro_bias.z);
+        const Vector3F accel_bias_after(stateStruct.accel_bias.x, stateStruct.accel_bias.y, stateStruct.accel_bias.z);
+        Vector3F rpy_after_update;
+        stateStruct.quat.to_euler(rpy_after_update.x, rpy_after_update.y, rpy_after_update.z);
+        if (FILE *fp = (FILE*)nullptr) {  // DISABLED: heavy EK3_ATT_BCN/EK3_STATE_DELTA
+          std::fprintf(
+              fp,
+              "EK3_ATT_BCN ts_ms=%lu time_us=%llu core=%u imu=%u beacon_id=%u innov=%.9g varInnov=%.9g testRatio=%.9g Kq=(%.9g,%.9g,%.9g,%.9g) quat_before=(%.9g,%.9g,%.9g,%.9g) quat_after=(%.9g,%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) drpy=(%.9g,%.9g,%.9g)\n",
+              (unsigned long)imuSampleTime_ms,
+              (unsigned long long)imuDataDelayed.time_ms,
+              (unsigned)core_index,
+              (unsigned)imu_index,
+              (unsigned)rngBcn.dataDelayed.beacon_ID,
+              (double)rngBcn.innov,
+              (double)rngBcn.varInnov,
+              (double)rngBcn.testRatio,
+              (double)Kfusion[0], (double)Kfusion[1], (double)Kfusion[2], (double)Kfusion[3],
+              (double)quat_before_update[0], (double)quat_before_update[1], (double)quat_before_update[2], (double)quat_before_update[3],
+              (double)stateStruct.quat[0], (double)stateStruct.quat[1], (double)stateStruct.quat[2], (double)stateStruct.quat[3],
+              (double)rpy_before_update.x, (double)rpy_before_update.y, (double)rpy_before_update.z,
+              (double)rpy_after_update.x, (double)rpy_after_update.y, (double)rpy_after_update.z,
+              (double)(rpy_after_update.x-rpy_before_update.x), (double)(rpy_after_update.y-rpy_before_update.y), (double)(rpy_after_update.z-rpy_before_update.z));
+          std::fprintf(
+              fp,
+              "EK3_STATE_DELTA ts_ms=%lu time_us=%llu core=%u imu=%u source=BCN beacon_id=%u pos_before=(%.9g,%.9g,%.9g) pos_after=(%.9g,%.9g,%.9g) d_pos=(%.9g,%.9g,%.9g) vel_before=(%.9g,%.9g,%.9g) vel_after=(%.9g,%.9g,%.9g) d_vel=(%.9g,%.9g,%.9g) gyro_bias_before=(%.9g,%.9g,%.9g) gyro_bias_after=(%.9g,%.9g,%.9g) d_gyro_bias=(%.9g,%.9g,%.9g) accel_bias_before=(%.9g,%.9g,%.9g) accel_bias_after=(%.9g,%.9g,%.9g) d_accel_bias=(%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) drpy=(%.9g,%.9g,%.9g) innov=%.9g varInnov=%.9g testRatio=%.9g\n",
+              (unsigned long)imuSampleTime_ms,
+              (unsigned long long)imuDataDelayed.time_ms,
+              (unsigned)core_index,
+              (unsigned)imu_index,
+              (unsigned)rngBcn.dataDelayed.beacon_ID,
+              (double)pos_before.x, (double)pos_before.y, (double)pos_before.z,
+              (double)pos_after.x, (double)pos_after.y, (double)pos_after.z,
+              (double)(pos_after.x-pos_before.x), (double)(pos_after.y-pos_before.y), (double)(pos_after.z-pos_before.z),
+              (double)vel_before.x, (double)vel_before.y, (double)vel_before.z,
+              (double)vel_after.x, (double)vel_after.y, (double)vel_after.z,
+              (double)(vel_after.x-vel_before.x), (double)(vel_after.y-vel_before.y), (double)(vel_after.z-vel_before.z),
+              (double)gyro_bias_before.x, (double)gyro_bias_before.y, (double)gyro_bias_before.z,
+              (double)gyro_bias_after.x, (double)gyro_bias_after.y, (double)gyro_bias_after.z,
+              (double)(gyro_bias_after.x-gyro_bias_before.x), (double)(gyro_bias_after.y-gyro_bias_before.y), (double)(gyro_bias_after.z-gyro_bias_before.z),
+              (double)accel_bias_before.x, (double)accel_bias_before.y, (double)accel_bias_before.z,
+              (double)accel_bias_after.x, (double)accel_bias_after.y, (double)accel_bias_after.z,
+              (double)(accel_bias_after.x-accel_bias_before.x), (double)(accel_bias_after.y-accel_bias_before.y), (double)(accel_bias_after.z-accel_bias_before.z),
+              (double)rpy_before_update.x, (double)rpy_before_update.y, (double)rpy_before_update.z,
+              (double)rpy_after_update.x, (double)rpy_after_update.y, (double)rpy_after_update.z,
+              (double)(rpy_after_update.x-rpy_before_update.x), (double)(rpy_after_update.y-rpy_before_update.y), (double)(rpy_after_update.z-rpy_before_update.z),
+              (double)rngBcn.innov,
+              (double)rngBcn.varInnov,
+              (double)rngBcn.testRatio);
         }
 
         // record healthy fusion

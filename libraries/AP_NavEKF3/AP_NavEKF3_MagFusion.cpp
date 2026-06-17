@@ -1,10 +1,29 @@
 #include <AP_HAL/AP_HAL.h>
+#include <cstdlib>
 
 #include "AP_NavEKF3.h"
 #include "AP_NavEKF3_core.h"
 
 #include <GCS_MAVLink/GCS.h>
 #include <AP_DAL/AP_DAL.h>
+#include <cstdio>
+
+namespace {
+FILE *ekf3_att_debug_file()
+{
+    // Opt-in via env var so default flights are clean (heavy logging stalls the
+    // real-time loop and distorts the trajectory). Set EK3_ATT_DEBUG=1 to enable.
+    static const bool _ek3_att_dbg_enabled = (std::getenv("EK3_ATT_DEBUG") != nullptr);
+    if (!_ek3_att_dbg_enabled) { return nullptr; }
+    static FILE *fp = nullptr;
+    if (fp == nullptr) {
+        fp = std::fopen("/home/mbublyk/Documents/ardu/estimator_files/ardupilot_ekf3_att_debug.log", "a");
+
+        if (fp != nullptr) { static char ek3buf[1*1024*1024]; std::setvbuf(fp, ek3buf, _IOFBF, sizeof(ek3buf)); std::atexit([](){ std::fflush(nullptr); }); }
+    }
+    return fp;
+}
+}
 
 // minimum GPS horizontal speed required to use GPS ground course for yaw alignment (m/s)
 #if APM_BUILD_TYPE(APM_BUILD_ArduPlane)
@@ -866,6 +885,15 @@ void NavEKF3_core::FuseMagnetometer()
             }
         }
         if (healthyFusion) {
+            const auto quat_before_update = stateStruct.quat;
+            Vector3F rpy_before_update;
+            quat_before_update.to_euler(rpy_before_update.x, rpy_before_update.y, rpy_before_update.z);
+            const Vector3F pos_before = stateStruct.position;
+            const Vector3F vel_before = stateStruct.velocity;
+            const Vector3F earth_mag_before = stateStruct.earth_magfield;
+            const Vector3F body_mag_before = stateStruct.body_magfield;
+            const Vector3F gyro_bias_before = stateStruct.gyro_bias;
+            const Vector3F accel_bias_before = stateStruct.accel_bias;
             // update the covariance matrix
             for (uint8_t i= 0; i<=stateIndexLim; i++) {
                 for (uint8_t j= 0; j<=stateIndexLim; j++) {
@@ -888,6 +916,78 @@ void NavEKF3_core::FuseMagnetometer()
             }
 
             stateStruct.quat.normalize();
+            Vector3F rpy_after_update;
+            stateStruct.quat.to_euler(rpy_after_update.x, rpy_after_update.y, rpy_after_update.z);
+            const Vector3F pos_after = stateStruct.position;
+            const Vector3F vel_after = stateStruct.velocity;
+            const Vector3F earth_mag_after = stateStruct.earth_magfield;
+            const Vector3F body_mag_after = stateStruct.body_magfield;
+            const Vector3F gyro_bias_after = stateStruct.gyro_bias;
+            const Vector3F accel_bias_after = stateStruct.accel_bias;
+            if (FILE *fp = ekf3_att_debug_file()) {
+                std::fprintf(
+                    fp,
+                    "EK3_ATT_MAG ts_ms=%lu time_us=%llu core=%u imu=%u axis=%u accepted=1 mag_meas=(%.9g,%.9g,%.9g) mag_pred=(%.9g,%.9g,%.9g) innov=(%.9g,%.9g,%.9g) varInnov=(%.9g,%.9g,%.9g) testRatio=(%.9g,%.9g,%.9g) Kq=(%.9g,%.9g,%.9g,%.9g) KmagE=(%.9g,%.9g,%.9g) KmagB=(%.9g,%.9g,%.9g) earth_mag_before=(%.9g,%.9g,%.9g) earth_mag_after=(%.9g,%.9g,%.9g) d_earth_mag=(%.9g,%.9g,%.9g) body_mag_before=(%.9g,%.9g,%.9g) body_mag_after=(%.9g,%.9g,%.9g) d_body_mag=(%.9g,%.9g,%.9g) gyro_bias_before=(%.9g,%.9g,%.9g) gyro_bias_after=(%.9g,%.9g,%.9g) d_gyro_bias=(%.9g,%.9g,%.9g) accel_bias_before=(%.9g,%.9g,%.9g) accel_bias_after=(%.9g,%.9g,%.9g) d_accel_bias=(%.9g,%.9g,%.9g) quat_before=(%.9g,%.9g,%.9g,%.9g) quat_after=(%.9g,%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) drpy=(%.9g,%.9g,%.9g)\n",
+                    (unsigned long)imuSampleTime_ms,
+                    (unsigned long long)imuDataDelayed.time_ms,
+                    (unsigned)core_index,
+                    (unsigned)imu_index,
+                    (unsigned)obsIndex,
+                    (double)magDataDelayed.mag.x, (double)magDataDelayed.mag.y, (double)magDataDelayed.mag.z,
+                    (double)MagPred.x, (double)MagPred.y, (double)MagPred.z,
+                    (double)innovMag[0], (double)innovMag[1], (double)innovMag[2],
+                    (double)varInnovMag[0], (double)varInnovMag[1], (double)varInnovMag[2],
+                    (double)magTestRatio[0], (double)magTestRatio[1], (double)magTestRatio[2],
+                    (double)Kfusion[0], (double)Kfusion[1], (double)Kfusion[2], (double)Kfusion[3],
+                    (double)Kfusion[16], (double)Kfusion[17], (double)Kfusion[18],
+                    (double)Kfusion[19], (double)Kfusion[20], (double)Kfusion[21],
+                    (double)earth_mag_before.x, (double)earth_mag_before.y, (double)earth_mag_before.z,
+                    (double)earth_mag_after.x, (double)earth_mag_after.y, (double)earth_mag_after.z,
+                    (double)(earth_mag_after.x-earth_mag_before.x), (double)(earth_mag_after.y-earth_mag_before.y), (double)(earth_mag_after.z-earth_mag_before.z),
+                    (double)body_mag_before.x, (double)body_mag_before.y, (double)body_mag_before.z,
+                    (double)body_mag_after.x, (double)body_mag_after.y, (double)body_mag_after.z,
+                    (double)(body_mag_after.x-body_mag_before.x), (double)(body_mag_after.y-body_mag_before.y), (double)(body_mag_after.z-body_mag_before.z),
+                    (double)gyro_bias_before.x, (double)gyro_bias_before.y, (double)gyro_bias_before.z,
+                    (double)gyro_bias_after.x, (double)gyro_bias_after.y, (double)gyro_bias_after.z,
+                    (double)(gyro_bias_after.x-gyro_bias_before.x), (double)(gyro_bias_after.y-gyro_bias_before.y), (double)(gyro_bias_after.z-gyro_bias_before.z),
+                    (double)accel_bias_before.x, (double)accel_bias_before.y, (double)accel_bias_before.z,
+                    (double)accel_bias_after.x, (double)accel_bias_after.y, (double)accel_bias_after.z,
+                    (double)(accel_bias_after.x-accel_bias_before.x), (double)(accel_bias_after.y-accel_bias_before.y), (double)(accel_bias_after.z-accel_bias_before.z),
+                    (double)quat_before_update[0], (double)quat_before_update[1], (double)quat_before_update[2], (double)quat_before_update[3],
+                    (double)stateStruct.quat[0], (double)stateStruct.quat[1], (double)stateStruct.quat[2], (double)stateStruct.quat[3],
+                    (double)rpy_before_update.x, (double)rpy_before_update.y, (double)rpy_before_update.z,
+                    (double)rpy_after_update.x, (double)rpy_after_update.y, (double)rpy_after_update.z,
+                    (double)(rpy_after_update.x-rpy_before_update.x), (double)(rpy_after_update.y-rpy_before_update.y), (double)(rpy_after_update.z-rpy_before_update.z));
+                std::fprintf(
+                    fp,
+                    "EK3_STATE_DELTA ts_ms=%lu time_us=%llu core=%u imu=%u source=MAG axis=%u pos_before=(%.9g,%.9g,%.9g) pos_after=(%.9g,%.9g,%.9g) d_pos=(%.9g,%.9g,%.9g) vel_before=(%.9g,%.9g,%.9g) vel_after=(%.9g,%.9g,%.9g) d_vel=(%.9g,%.9g,%.9g) gyro_bias_before=(%.9g,%.9g,%.9g) gyro_bias_after=(%.9g,%.9g,%.9g) d_gyro_bias=(%.9g,%.9g,%.9g) accel_bias_before=(%.9g,%.9g,%.9g) accel_bias_after=(%.9g,%.9g,%.9g) d_accel_bias=(%.9g,%.9g,%.9g) earth_mag_before=(%.9g,%.9g,%.9g) earth_mag_after=(%.9g,%.9g,%.9g) d_earth_mag=(%.9g,%.9g,%.9g) body_mag_before=(%.9g,%.9g,%.9g) body_mag_after=(%.9g,%.9g,%.9g) d_body_mag=(%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) drpy=(%.9g,%.9g,%.9g)\n",
+                    (unsigned long)imuSampleTime_ms,
+                    (unsigned long long)imuDataDelayed.time_ms,
+                    (unsigned)core_index,
+                    (unsigned)imu_index,
+                    (unsigned)obsIndex,
+                    (double)pos_before.x, (double)pos_before.y, (double)pos_before.z,
+                    (double)pos_after.x, (double)pos_after.y, (double)pos_after.z,
+                    (double)(pos_after.x-pos_before.x), (double)(pos_after.y-pos_before.y), (double)(pos_after.z-pos_before.z),
+                    (double)vel_before.x, (double)vel_before.y, (double)vel_before.z,
+                    (double)vel_after.x, (double)vel_after.y, (double)vel_after.z,
+                    (double)(vel_after.x-vel_before.x), (double)(vel_after.y-vel_before.y), (double)(vel_after.z-vel_before.z),
+                    (double)gyro_bias_before.x, (double)gyro_bias_before.y, (double)gyro_bias_before.z,
+                    (double)gyro_bias_after.x, (double)gyro_bias_after.y, (double)gyro_bias_after.z,
+                    (double)(gyro_bias_after.x-gyro_bias_before.x), (double)(gyro_bias_after.y-gyro_bias_before.y), (double)(gyro_bias_after.z-gyro_bias_before.z),
+                    (double)accel_bias_before.x, (double)accel_bias_before.y, (double)accel_bias_before.z,
+                    (double)accel_bias_after.x, (double)accel_bias_after.y, (double)accel_bias_after.z,
+                    (double)(accel_bias_after.x-accel_bias_before.x), (double)(accel_bias_after.y-accel_bias_before.y), (double)(accel_bias_after.z-accel_bias_before.z),
+                    (double)earth_mag_before.x, (double)earth_mag_before.y, (double)earth_mag_before.z,
+                    (double)earth_mag_after.x, (double)earth_mag_after.y, (double)earth_mag_after.z,
+                    (double)(earth_mag_after.x-earth_mag_before.x), (double)(earth_mag_after.y-earth_mag_before.y), (double)(earth_mag_after.z-earth_mag_before.z),
+                    (double)body_mag_before.x, (double)body_mag_before.y, (double)body_mag_before.z,
+                    (double)body_mag_after.x, (double)body_mag_after.y, (double)body_mag_after.z,
+                    (double)(body_mag_after.x-body_mag_before.x), (double)(body_mag_after.y-body_mag_before.y), (double)(body_mag_after.z-body_mag_before.z),
+                    (double)rpy_before_update.x, (double)rpy_before_update.y, (double)rpy_before_update.z,
+                    (double)rpy_after_update.x, (double)rpy_after_update.y, (double)rpy_after_update.z,
+                    (double)(rpy_after_update.x-rpy_before_update.x), (double)(rpy_after_update.y-rpy_before_update.y), (double)(rpy_after_update.z-rpy_before_update.z));
+            }
 
         } else {
             // record bad axis
@@ -911,6 +1011,21 @@ void NavEKF3_core::FuseMagnetometer()
 */
 bool NavEKF3_core::fuseEulerYaw(yawFusionMethod method)
 {
+    const char *method_name = "UNKNOWN";
+    switch (method) {
+    case yawFusionMethod::GPS: method_name = "GPS"; break;
+    case yawFusionMethod::GSF: method_name = "GSF"; break;
+    case yawFusionMethod::STATIC: method_name = "STATIC"; break;
+    case yawFusionMethod::MAGNETOMETER: method_name = "MAGNETOMETER"; break;
+    case yawFusionMethod::PREDICTED: method_name = "PREDICTED"; break;
+#if EK3_FEATURE_EXTERNAL_NAV
+    case yawFusionMethod::EXTNAV: method_name = "EXTNAV"; break;
+#endif
+    }
+    const auto quat_before = stateStruct.quat;
+    Vector3F rpy_before;
+    quat_before.to_euler(rpy_before.x, rpy_before.y, rpy_before.z);
+
     const ftype &q0 = stateStruct.quat[0];
     const ftype &q1 = stateStruct.quat[1];
     const ftype &q2 = stateStruct.quat[2];
@@ -1105,6 +1220,8 @@ bool NavEKF3_core::fuseEulerYaw(yawFusionMethod method)
         return false;
     }
 
+    Vector3F magMeasNED_logged;
+    ftype yawAngMeasured_logged = NAN;
     // Calculate the innovation
     switch (method) {
     case yawFusionMethod::MAGNETOMETER:
@@ -1113,6 +1230,8 @@ bool NavEKF3_core::fuseEulerYaw(yawFusionMethod method)
         // rotate measured mag components into earth frame
         Vector3F magMeasNED = Tbn_zeroYaw*magDataDelayed.mag;
         ftype yawAngMeasured = wrap_PI(-atan2F(magMeasNED.y, magMeasNED.x) + MagDeclination());
+        magMeasNED_logged = magMeasNED;
+        yawAngMeasured_logged = yawAngMeasured;
         innovYaw = wrap_PI(yawAngPredicted - yawAngMeasured);
         break;
     }
@@ -1180,6 +1299,27 @@ bool NavEKF3_core::fuseEulerYaw(yawFusionMethod method)
     // Declare the magnetometer unhealthy if the innovation test fails
     if (yawTestRatio > 1.0f) {
         magHealth = false;
+        if (FILE *fp = ekf3_att_debug_file()) {
+            std::fprintf(
+                fp,
+                "EK3_ATT_YAW ts_ms=%lu time_us=%llu core=%u imu=%u method=%s accepted=0 reason=yaw_test_ratio order=%u R=%.9g innov=%.9g yaw_pred=%.9g yaw_meas=%.9g varInnov=%.9g yawTestRatio=%.9g mag_body=(%.9g,%.9g,%.9g) mag_ned_tilt=(%.9g,%.9g,%.9g) decl=%.9g rpy_before=(%.9g,%.9g,%.9g)\n",
+                (unsigned long)imuSampleTime_ms,
+                (unsigned long long)imuDataDelayed.time_ms,
+                (unsigned)core_index,
+                (unsigned)imu_index,
+                method_name,
+                (unsigned)order,
+                (double)R_YAW,
+                (double)innovYaw,
+                (double)yawAngPredicted,
+                (double)yawAngMeasured_logged,
+                (double)varInnov,
+                (double)yawTestRatio,
+                (double)magDataDelayed.mag.x, (double)magDataDelayed.mag.y, (double)magDataDelayed.mag.z,
+                (double)magMeasNED_logged.x, (double)magMeasNED_logged.y, (double)magMeasNED_logged.z,
+                (double)MagDeclination(),
+                (double)rpy_before.x, (double)rpy_before.y, (double)rpy_before.z);
+        }
         // On the ground a large innovation could be due to large initial gyro bias or magnetic interference from nearby objects
         // If we are flying, then it is more likely due to a magnetometer fault and we should not fuse the data
         if (inFlight) {
@@ -1224,10 +1364,43 @@ bool NavEKF3_core::fuseEulerYaw(yawFusionMethod method)
         ConstrainVariances();
 
         // correct the state vector
+        const ftype constrained_innov_yaw = constrain_ftype(innovYaw, -0.5f, 0.5f);
         for (uint8_t i=0; i<=stateIndexLim; i++) {
-            statesArray[i] -= Kfusion[i] * constrain_ftype(innovYaw, -0.5f, 0.5f);
+            statesArray[i] -= Kfusion[i] * constrained_innov_yaw;
         }
         stateStruct.quat.normalize();
+
+        const auto quat_after = stateStruct.quat;
+        Vector3F rpy_after;
+        quat_after.to_euler(rpy_after.x, rpy_after.y, rpy_after.z);
+        if (FILE *fp = ekf3_att_debug_file()) {
+            std::fprintf(
+                fp,
+                "EK3_ATT_YAW ts_ms=%lu time_us=%llu core=%u imu=%u method=%s accepted=1 order=%u R=%.9g innov=%.9g innov_constrained=%.9g yaw_pred=%.9g yaw_meas=%.9g varInnov=%.9g yawTestRatio=%.9g mag_body=(%.9g,%.9g,%.9g) mag_ned_tilt=(%.9g,%.9g,%.9g) decl=%.9g H=(%.9g,%.9g,%.9g,%.9g) Kq=(%.9g,%.9g,%.9g,%.9g) quat_before=(%.9g,%.9g,%.9g,%.9g) quat_after=(%.9g,%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) drpy=(%.9g,%.9g,%.9g)\n",
+                (unsigned long)imuSampleTime_ms,
+                (unsigned long long)imuDataDelayed.time_ms,
+                (unsigned)core_index,
+                (unsigned)imu_index,
+                method_name,
+                (unsigned)order,
+                (double)R_YAW,
+                (double)innovYaw,
+                (double)constrained_innov_yaw,
+                (double)yawAngPredicted,
+                (double)yawAngMeasured_logged,
+                (double)varInnov,
+                (double)yawTestRatio,
+                (double)magDataDelayed.mag.x, (double)magDataDelayed.mag.y, (double)magDataDelayed.mag.z,
+                (double)magMeasNED_logged.x, (double)magMeasNED_logged.y, (double)magMeasNED_logged.z,
+                (double)MagDeclination(),
+                (double)H_YAW[0], (double)H_YAW[1], (double)H_YAW[2], (double)H_YAW[3],
+                (double)Kfusion[0], (double)Kfusion[1], (double)Kfusion[2], (double)Kfusion[3],
+                (double)quat_before[0], (double)quat_before[1], (double)quat_before[2], (double)quat_before[3],
+                (double)quat_after[0], (double)quat_after[1], (double)quat_after[2], (double)quat_after[3],
+                (double)rpy_before.x, (double)rpy_before.y, (double)rpy_before.z,
+                (double)rpy_after.x, (double)rpy_after.y, (double)rpy_after.z,
+                (double)(rpy_after.x - rpy_before.x), (double)(rpy_after.y - rpy_before.y), (double)(rpy_after.z - rpy_before.z));
+        }
 
         // record fusion numerical health status
         faultStatus.bad_yaw = false;
@@ -1595,6 +1768,8 @@ bool NavEKF3_core::EKFGSF_getYaw(ftype &yaw, ftype &yawVariance) const
 void NavEKF3_core::resetQuatStateYawOnly(ftype yaw, ftype yawVariance, rotationOrder order)
 {
     QuaternionF quatBeforeReset = stateStruct.quat;
+    Vector3F rpy_before;
+    quatBeforeReset.to_euler(rpy_before.x, rpy_before.y, rpy_before.z);
 
     // check if we should use a 321 or 312 Rotation order and update the quaternion
     // states using the preferred yaw definition
@@ -1629,6 +1804,27 @@ void NavEKF3_core::resetQuatStateYawOnly(ftype yaw, ftype yawVariance, rotationO
     // record the yaw reset event
     yawResetAngle += deltaYaw;
     lastYawReset_ms = imuSampleTime_ms;
+
+    Vector3F rpy_after;
+    stateStruct.quat.to_euler(rpy_after.x, rpy_after.y, rpy_after.z);
+    if (FILE *fp = ekf3_att_debug_file()) {
+        std::fprintf(
+            fp,
+            "EK3_ATT_RESET ts_ms=%lu time_us=%llu core=%u imu=%u kind=YawOnly order=%u yaw_target=%.9g yaw_variance=%.9g quat_before=(%.9g,%.9g,%.9g,%.9g) quat_after=(%.9g,%.9g,%.9g,%.9g) rpy_before=(%.9g,%.9g,%.9g) rpy_after=(%.9g,%.9g,%.9g) drpy=(%.9g,%.9g,%.9g) deltaYaw=%.9g\n",
+            (unsigned long)imuSampleTime_ms,
+            (unsigned long long)imuDataDelayed.time_ms,
+            (unsigned)core_index,
+            (unsigned)imu_index,
+            (unsigned)order,
+            (double)yaw,
+            (double)yawVariance,
+            (double)quatBeforeReset[0], (double)quatBeforeReset[1], (double)quatBeforeReset[2], (double)quatBeforeReset[3],
+            (double)stateStruct.quat[0], (double)stateStruct.quat[1], (double)stateStruct.quat[2], (double)stateStruct.quat[3],
+            (double)rpy_before.x, (double)rpy_before.y, (double)rpy_before.z,
+            (double)rpy_after.x, (double)rpy_after.y, (double)rpy_after.z,
+            (double)(rpy_after.x-rpy_before.x), (double)(rpy_after.y-rpy_before.y), (double)(rpy_after.z-rpy_before.z),
+            (double)deltaYaw);
+    }
 
     // record the yaw reset event
     recordYawResetsCompleted();
