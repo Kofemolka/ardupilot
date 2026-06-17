@@ -1025,6 +1025,16 @@ void NavEKF3_core::readRngBcnData()
     if (rngBcn.dataToFuse) {
         rngBcn.dataDelayed.beacon_posNED.x += rngBcn.posOffsetNED.x;
         rngBcn.dataDelayed.beacon_posNED.y += rngBcn.posOffsetNED.y;
+
+        const auto original = rngBcn.dataDelayed.beacon_posNED.xy();
+
+        rngBcn.dataDelayed.beacon_posNED.xy() += EKF_origin.get_distance_NE_ftype(public_origin);
+
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BCN off: [%u] %.1f/%.1f -> %.1f/%.1f, D=%0.1f",
+            rngBcn.dataDelayed.beacon_ID,
+            original.x, original.y, rngBcn.dataDelayed.beacon_posNED.x, rngBcn.dataDelayed.beacon_posNED.y,
+            rngBcn.dataDelayed.rng
+        );
     }
 
 }

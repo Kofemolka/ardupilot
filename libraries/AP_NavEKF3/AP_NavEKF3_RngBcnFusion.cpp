@@ -84,6 +84,7 @@ void NavEKF3_core::SelectRngBcnFusion()
                     rngBcn.originEstInit = true;
                     rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
                     rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
+                    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BCN origin offset set to %.1f/%.1f", rngBcn.posOffsetNED.x, rngBcn.posOffsetNED.y);
                 }
                 // beacons are used as the primary means of position reference
                 FuseRngBcn();
@@ -854,7 +855,7 @@ void NavEKF3_core::DoRngBcnRecovery()
     }
 
     ftype residualSq;
-    const auto result = SolveMlat(samples, numSamples, residualSq);
+    auto result = SolveMlat(samples, numSamples, residualSq);
 
     rngBcn.receiverPos.x = result.x;
     rngBcn.receiverPos.y = result.y;
@@ -864,6 +865,7 @@ void NavEKF3_core::DoRngBcnRecovery()
         return;
     }
 
+    result += EKF_origin.get_distance_NE_ftype(public_origin);
     stateStruct.position.x = result.x;
     stateStruct.position.y = result.y;
 
@@ -878,7 +880,7 @@ void NavEKF3_core::DoRngBcnRecovery()
     ForceSymmetry();
     ConstrainVariances();
    
-    rngBcn.originEstInit   = false;
+    // rngBcn.originEstInit   = false;
     rngBcn.lastPassTime_ms = imuSampleTime_ms;
     rngBcn.recPassCount   = 0;
 
