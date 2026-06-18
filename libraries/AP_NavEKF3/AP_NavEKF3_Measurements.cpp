@@ -1021,21 +1021,7 @@ void NavEKF3_core::readRngBcnData()
     // Check the buffer for measurements that have been overtaken by the fusion time horizon and need to be fused
     rngBcn.dataToFuse = rngBcn.storedRange.recall(rngBcn.dataDelayed, imuDataDelayed.time_ms);
 
-    // Correct the range beacon earth frame origin for estimated offset relative to the EKF earth frame origin
-    if (rngBcn.dataToFuse) {
-        const auto original = rngBcn.dataDelayed.beacon_posNED.xy();
-
-        rngBcn.dataDelayed.beacon_posNED.x -= rngBcn.posOffsetNED.x;
-        rngBcn.dataDelayed.beacon_posNED.y -= rngBcn.posOffsetNED.y;        
-
-        // rngBcn.dataDelayed.beacon_posNED.xy() += EKF_origin.get_distance_NE_ftype(public_origin);
-
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BCN off: [%u] %.1f/%.1f -> %.1f/%.1f, D=%0.1f",
-            rngBcn.dataDelayed.beacon_ID,
-            original.x, original.y, rngBcn.dataDelayed.beacon_posNED.x, rngBcn.dataDelayed.beacon_posNED.y,
-            rngBcn.dataDelayed.rng
-        );
-    }
+    // beacon_posNED is kept in raw beacon frame here; FuseRngBcn applies posOffsetNED locally
 
 }
 #endif  // EK3_FEATURE_BEACON_FUSION
