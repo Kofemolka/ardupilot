@@ -880,7 +880,7 @@ void NavEKF3_core::DoRngBcnRecovery()
     ForceSymmetry();
     ConstrainVariances();
    
-    // rngBcn.originEstInit   = false;
+    rngBcn.originEstInit   = false;
     rngBcn.lastPassTime_ms = imuSampleTime_ms;
     rngBcn.recPassCount   = 0;
 
