@@ -70,15 +70,7 @@ void NavEKF3_core::SelectRngBcnFusion()
 
     // Determine if we need to fuse range beacon data on this time step
     if (rngBcn.dataToFuse) {
-        // TODO: not sure
-        const bool isDead =
-            (frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) &&
-            rngBcn.alignmentCompleted &&
-            (imuSampleTime_ms - rngBcn.lastPassTime_ms) > (uint32_t)(frontend->_rngBcnRecHoldoff_s * 1000U);
-
-        if (isDead) {
-            DoRngBcnRecovery();
-        } else if (PV_AidingMode == AID_ABSOLUTE) {
+        if (PV_AidingMode == AID_ABSOLUTE) {
             if ((frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) && rngBcn.alignmentCompleted) {
                 if (!rngBcn.originEstInit) {
                     rngBcn.originEstInit = true;
@@ -88,6 +80,16 @@ void NavEKF3_core::SelectRngBcnFusion()
                 }
                 // beacons are used as the primary means of position reference
                 FuseRngBcn();
+                // Check staleness after FuseRngBcn has had a chance to refresh lastPassTime_ms.
+                // If still stale, attempt MLAT recovery.
+                // When healthy, discard any partial MLAT count.
+                const bool isStale =
+                    (imuSampleTime_ms - rngBcn.lastPassTime_ms) > (uint32_t)(frontend->_rngBcnRecHoldoff_s * 1000U);
+                if (isStale) {
+                    DoRngBcnRecovery();
+                } else {
+                    rngBcn.recPassCount = 0;
+                }
             } else {
                 // If another source (i.e. GPS, ExtNav) is the primary reference, we continue to use the beacon data
                 // to calculate an independent position that is used to update the beacon position offset if we need to
