@@ -84,6 +84,7 @@ void NavEKF3_core::SelectRngBcnFusion()
                     rngBcn.originEstInit = true;
                     rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
                     rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
+                    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BCN origin offset set to %.1f/%.1f", rngBcn.posOffsetNED.x, rngBcn.posOffsetNED.y);
                 }
                 // beacons are used as the primary means of position reference
                 FuseRngBcn();
@@ -108,6 +109,16 @@ void NavEKF3_core::FuseRngBcn()
 {
     rngBcn.fusionMode = BeaconFusion::RngFusionMode::RANGE;
 
+    // Save raw beacon position before any modification (for fusionReport)
+    const Vector3F raw_beacon_posNED = rngBcn.dataDelayed.beacon_posNED;
+
+    // Apply XY posOffsetNED in-place to convert beacon frame -> EKF frame.
+    // Must happen before CalcRangeBeaconPosDownOffset (which reads beacon_posNED.xy).
+    // Safe: FuseRngBcn and FuseRngBcnStatic are mutually exclusive per measurement cycle;
+    // FuseRngBcnStatic needs raw beacon_posNED (beacon frame) and runs separately.
+    rngBcn.dataDelayed.beacon_posNED.x -= rngBcn.posOffsetNED.x;
+    rngBcn.dataDelayed.beacon_posNED.y -= rngBcn.posOffsetNED.y;
+
     // declarations
     ftype pn;
     ftype pe;
@@ -123,6 +134,7 @@ void NavEKF3_core::FuseRngBcn()
 
     if (activeHgtSource != AP_NavEKF_Source::SourceZ::BEACON) {
         // calculate the vertical offset from EKF datum to beacon datum
+        // (also adjusts beacon_posNED.z += posOffsetNED.z at its end)
         CalcRangeBeaconPosDownOffset(R_BCN, stateStruct.position, false);
     } else {
         rngBcn.posOffsetNED.z = 0.0f;
@@ -325,7 +337,7 @@ void NavEKF3_core::FuseRngBcn()
         // Update the fusion report
         if (rngBcn.dataDelayed.beacon_ID < rngBcn.numFusionReports) {
             auto &report = rngBcn.fusionReport[rngBcn.dataDelayed.beacon_ID];
-            report.beaconPosNED = rngBcn.dataDelayed.beacon_posNED;
+            report.beaconPosNED = raw_beacon_posNED;
             report.innov = rngBcn.innov;
             report.innovVar = rngBcn.varInnov;
             report.rng = rngBcn.dataDelayed.rng;
@@ -854,7 +866,7 @@ void NavEKF3_core::DoRngBcnRecovery()
     }
 
     ftype residualSq;
-    const auto result = SolveMlat(samples, numSamples, residualSq);
+    auto result = SolveMlat(samples, numSamples, residualSq);
 
     rngBcn.receiverPos.x = result.x;
     rngBcn.receiverPos.y = result.y;
@@ -864,6 +876,7 @@ void NavEKF3_core::DoRngBcnRecovery()
         return;
     }
 
+    result += EKF_origin.get_distance_NE_ftype(public_origin);
     stateStruct.position.x = result.x;
     stateStruct.position.y = result.y;
 
