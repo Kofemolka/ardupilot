@@ -1416,13 +1416,13 @@ private:
         bool alignmentCompleted;      // True when the initial position alignment using range measurements has finished
         enum class RngFusionMode : uint8_t { STATIC = 0, RANGE = 1, MLAT = 2 };
         RngFusionMode fusionMode;     // active fusion path
-        uint8_t recPassCount;        // consecutive successful recovery passes since dead detection
+        uint8_t recPassCount;         // consecutive successful recovery passes since dead detection
         ftype hdop;                   // last 2-D HDOP from geometry check (MLAT_MAX_HDOP = not yet valid)
         uint8_t lastIndex;            // Range beacon index last read -  used during initialisation of the 3-state filter
         Vector3F posSum;              // Sum of range beacon NED position (m) - used during initialisation of the 3-state filter
         uint8_t numMeas;                 // Number of beacon measurements - used during initialisation of the 3-state filter
         ftype sum;                       // Sum of range measurements (m) - used during initialisation of the 3-state filter
-        uint8_t N;                  // Number of range beacons in use
+        uint8_t N;                       // Number of range beacons in use
         ftype maxPosD;                   // maximum position of all beacons in the down direction (m)
         ftype minPosD;                   // minimum position of all beacons in the down direction (m)
         bool usingMinHypothesis;            // true when the min beacon constellation offset hypothesis is being used

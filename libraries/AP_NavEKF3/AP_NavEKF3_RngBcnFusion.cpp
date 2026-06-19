@@ -768,12 +768,8 @@ bool NavEKF3_core::GetHdop(const rng_bcn_elements *samples, uint8_t n)
   Returns the converged XY position and mean squared residual.
   Altitude is intentionally left unchanged — handled by posOffsetNED.z.
 */
-struct MlatResult {
-    ftype x, y;
-    ftype residualSq;
-};
 
-// TODO: 2D or 3D?
+// TODO: compensate for altitude differences?
 Vector2F NavEKF3_core::SolveMlat(const rng_bcn_elements *samples, uint8_t n, ftype& residualSq)
 {
     static constexpr ftype   MLAT_LEARNING_RATE      = 0.1f;   // tune to beacon scale
