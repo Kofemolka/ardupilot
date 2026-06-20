@@ -96,6 +96,7 @@ struct PACKED log_XKRB {
 // @Field: CVD: Receiver position covariance, down (m^2)
 // @Field: Mode: Fusion mode (2=mlat, 1=range, 0=static)
 // @Field: HDOP: MLAT 2-D horizontal dilution of precision (LSB=0.1)
+// @Field: FailCnt: Cumulative failed innovation-gate checks since last position reset
 struct PACKED log_XKRP {
     LOG_PACKET_HEADER;
     uint64_t time_us;
@@ -108,6 +109,7 @@ struct PACKED log_XKRP {
     float    covD;
     uint8_t  mode;
     uint8_t  hdop;
+    uint16_t failCnt;
 };
 
 // @LoggerMessage: XKF1
@@ -510,7 +512,7 @@ struct PACKED log_XKV {
     { LOG_XKV2_MSG, sizeof(log_XKV), \
       "XKV2","QBffffffffffff","TimeUS,C,V12,V13,V14,V15,V16,V17,V18,V19,V20,V21,V22,V23", "s#------------", "F-------------" , true }, \
     { LOG_XKRP_MSG, sizeof(log_XKRP), \
-      "XKRP","QBffffffBB","TimeUS,C,PN,PE,PD,CVN,CVE,CVD,Mode,HDOP", "s#mmm-----", "F-000000-A" , true }, \
+      "XKRP","QBffffffBBH","TimeUS,C,PN,PE,PD,CVN,CVE,CVD,Mode,HDOP,FailCnt", "s#mmm------", "F-000000-A-" , true }, \
     { LOG_XKRB_MSG, sizeof(log_XKRB), \
       "XKRB","QBBfffffB","TimeUS,C,BcnID,Rng,Innov,BPN,BPE,BPD,OK", "s#-mmmmm-", "F--00000-" , true },
 #else

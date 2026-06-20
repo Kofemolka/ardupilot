@@ -54,7 +54,8 @@ void NavEKF3_core::BeaconFusion::InitialiseVariables()
     posOffsetNED.zero();
     originEstInit = false;
     fusionMode = RngFusionMode::STATIC;
-    recPassCount = 0;
+    recPassCount    = 0;
+    failFusionCount = 0;
     hdop = 0.0f;
 }
 
@@ -80,12 +81,20 @@ void NavEKF3_core::SelectRngBcnFusion()
                 }
                 // beacons are used as the primary means of position reference
                 FuseRngBcn();
-                // Check staleness after FuseRngBcn has had a chance to refresh lastPassTime_ms.
-                // If still stale, attempt MLAT recovery.
-                // When healthy, discard any partial MLAT count.
-                const bool isStale =
-                    (imuSampleTime_ms - rngBcn.lastPassTime_ms) > (uint32_t)(frontend->_rngBcnRecHoldoff_s * 1000U);
-                if (isStale) {
+
+                // Count failed innovation-gate checks (capped at threshold to avoid overflow).
+                // Trigger position recovery once the failure count reaches the configured threshold.
+                if (!rngBcn.health &&
+                    frontend->_rngBcnRecFailures > 0 &&
+                    rngBcn.failFusionCount < (uint16_t)frontend->_rngBcnRecFailures) {
+                    rngBcn.failFusionCount++;
+                }
+                
+                const bool isDead =
+                    (frontend->_rngBcnRecFailures > 0) &&
+                    (rngBcn.failFusionCount >= (uint16_t)frontend->_rngBcnRecFailures);
+
+                if (isDead) {
                     DoRngBcnRecovery();
                 } else {
                     rngBcn.recPassCount = 0;
@@ -889,9 +898,10 @@ void NavEKF3_core::DoRngBcnRecovery()
     ForceSymmetry();
     ConstrainVariances();
    
-    rngBcn.originEstInit   = false;
-    rngBcn.lastPassTime_ms = imuSampleTime_ms;
-    rngBcn.recPassCount   = 0;
+    rngBcn.originEstInit    = false;
+    rngBcn.lastPassTime_ms  = imuSampleTime_ms;
+    rngBcn.recPassCount     = 0;
+    rngBcn.failFusionCount  = 0;
 
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RNG IMU%u MLAT reset", (unsigned)imu_index);
 }

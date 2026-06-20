@@ -760,14 +760,13 @@ const AP_Param::GroupInfo NavEKF3::var_info2[] = {
     // @User: Advanced
     AP_GROUPINFO("BCN_REC_PASS", 13, NavEKF3, _rngBcnRecPasses, 5),
 
-    // @Param: BCN_HOLDOFF
-    // @DisplayName: Range beacon recovery holdoff time
-    // @Description: Time in seconds to hold off after failing to fuse range beacon measurements before starting the MLAT recovery process.
-    // @Range: 1 30
+    // @Param: BCN_FUS_FAIL
+    // @DisplayName: Beacon Fusion Fail Count
+    // @Description: Number of failed beacon range innovation-gate checks before triggering MLAT position recovery. Set 0 to disable recovery.
+    // @Range: 0 200
     // @Increment: 1
     // @User: Advanced
-    // @Units: s
-    AP_GROUPINFO("BCN_HOLDOFF", 14, NavEKF3, _rngBcnRecHoldoff_s, 5),
+    AP_GROUPINFO("BCN_FUS_FAIL", 14, NavEKF3, _rngBcnRecFailures, 10),
 
     AP_GROUPEND
 };

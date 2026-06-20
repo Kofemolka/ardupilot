@@ -316,6 +316,7 @@ void NavEKF3_core::Log_Write_RngBcnPos(uint64_t time_us)
         covD    : (float)rngBcn.receiverPosCov[2][2],
         mode    : (uint8_t)rngBcn.fusionMode,
         hdop    : (uint8_t)constrain_float((float)rngBcn.hdop * 10.0f, 0.0f, 255.0f),
+        failCnt : rngBcn.failFusionCount,
     };
     AP::logger().WriteBlock(&pkt, sizeof(pkt));
 }
