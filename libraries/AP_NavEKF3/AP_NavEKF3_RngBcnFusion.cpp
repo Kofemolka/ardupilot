@@ -77,7 +77,6 @@ void NavEKF3_core::SelectRngBcnFusion()
                     rngBcn.originEstInit = true;
                     rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
                     rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
-                    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BCN origin offset set to %.1f/%.1f", rngBcn.posOffsetNED.x, rngBcn.posOffsetNED.y);
                 }
                 // beacons are used as the primary means of position reference
                 FuseRngBcn();
@@ -145,7 +144,6 @@ void NavEKF3_core::FuseRngBcn()
 
     if (activeHgtSource != AP_NavEKF_Source::SourceZ::BEACON) {
         // calculate the vertical offset from EKF datum to beacon datum
-        // (also adjusts beacon_posNED.z += posOffsetNED.z at its end)
         CalcRangeBeaconPosDownOffset(R_BCN, stateStruct.position, false);
     } else {
         rngBcn.posOffsetNED.z = 0.0f;

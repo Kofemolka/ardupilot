@@ -754,7 +754,7 @@ const AP_Param::GroupInfo NavEKF3::var_info2[] = {
 
     // @Param: BCN_REC_PASSES
     // @DisplayName: Range beacon MLAT recovery passes
-    // @Description: Number of consecutive successful MLAT passes required before the EKF horizontal position is reset to the MLAT solution.
+    // @Description: Number of consecutive successful recovery passes required before the EKF horizontal position is reset to the MLAT solution.
     // @Range: 1 20
     // @Increment: 1
     // @User: Advanced
@@ -766,7 +766,7 @@ const AP_Param::GroupInfo NavEKF3::var_info2[] = {
     // @Range: 0 200
     // @Increment: 1
     // @User: Advanced
-    AP_GROUPINFO("BCN_FUS_FAIL", 14, NavEKF3, _rngBcnRecFailures, 10),
+    AP_GROUPINFO("BCN_FUS_FAIL", 14, NavEKF3, _rngBcnRecFailures, 30),
 
     AP_GROUPEND
 };
