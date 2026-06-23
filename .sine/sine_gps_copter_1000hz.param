@@ -1,0 +1,47 @@
+## -------------------------------------------
+## Copter, GPS navigation, high-rate IMU logging (for BIN-based route recording).
+## Mirrors sine_gps_plane_1000hz.param but for ArduCopter.
+
+# No onboard beacons (we inject our own 50 m beacons into the BIN afterwards)
+BCN_TYPE,0
+
+## EKF source set 1 = GPS (POSXY/VELXY from GPS, POSZ baro, YAW compass)
+EK3_SRC_OPTIONS,0
+EK3_SRC1_POSXY,3
+EK3_SRC1_POSZ,1
+EK3_SRC1_VELXY,3
+EK3_SRC1_VELZ,3
+EK3_SRC1_YAW,1
+
+# SITL fake secondary GPS slot
+GPS2_TYPE,100
+GPS_AUTO_SWITCH,1
+GPS1_TYPE,1
+
+## -------------------------------------------
+## Tuning
+EK3_BCN_M_NSE,50
+EK3_BCN_I_GTE,1000
+
+# Waypoint speed: fly fast enough that the 5x 2 km circle finishes in a sane wall time
+WPNAV_SPEED,2000
+WPNAV_SPEED_UP,400
+WPNAV_SPEED_DN,300
+WPNAV_ACCEL,250
+
+## -------------------------------------------
+## Debug behavior
+# log from boot so the pre-arm stillness window is captured in the BIN
+LOG_DISARMED,1
+# do nothing on failsafe; don't trip dead-reckoning failsafe
+FS_EKF_ACTION,0
+FS_DR_ENABLE,0
+# single EKF core
+EK3_IMU_MASK,1
+
+# IMU-rate experiment: log IMU at loop rate.
+# Copter (unlike Plane) needs MASK_LOG_IMU_FAST (bit 18 = 262144) to log the IMU
+# message every fast loop; plain MASK_LOG_IMU logs it slow (~18 Hz). 442366 =
+# copter default 180222 | 262144.
+LOG_BITMASK,442366
+SCHED_LOOP_RATE,1000
