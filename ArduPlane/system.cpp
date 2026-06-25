@@ -161,6 +161,10 @@ void Plane::init_ardupilot()
     }
 #endif
 
+#if AP_BEACON_ENABLED
+    g2.beacon.init();
+#endif
+
 #if AC_PRECLAND_ENABLED
     // scheduler table specifies 400Hz, but we can call it no faster
     // than the scheduler loop rate:

@@ -1279,6 +1279,12 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("GUIDED_TIMEOUT", 40, ParametersG2, guided_timeout, 3.0f),
 
+#if AP_BEACON_ENABLED
+    // @Group: BCN
+    // @Path: ../libraries/AP_Beacon/AP_Beacon.cpp
+    AP_SUBGROUPINFO(beacon, "BCN", 41, ParametersG2, AP_Beacon),
+#endif
+
     AP_GROUPEND
 };
 
@@ -1289,6 +1295,9 @@ ParametersG2::ParametersG2(void) :
 #endif
 #if HAL_SOARING_ENABLED
     ,soaring_controller(plane.TECS_controller, plane.aparm)
+#endif
+#if AP_BEACON_ENABLED
+    ,beacon()
 #endif
 {
     AP_Param::setup_object_defaults(this, var_info);
