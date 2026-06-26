@@ -593,6 +593,10 @@ public:
 #if AP_PLANE_SYSTEMID_ENABLED
     AP_SystemID systemid;
 #endif
+
+#if AP_BEACON_ENABLED
+    AP_Beacon beacon;
+#endif
 };
 
 extern const AP_Param::Info var_info[];

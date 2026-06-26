@@ -44,7 +44,10 @@
 #include <AP_Camera/AP_Camera.h>          // Photo or video camera
 #include <AP_Terrain/AP_Terrain.h>
 #include <AP_RPM/AP_RPM.h>
+#include <AP_Beacon/AP_Beacon_config.h>
+#if AP_BEACON_ENABLED
 #include <AP_Beacon/AP_Beacon.h>
+#endif
 
 #include <AP_AdvancedFailsafe/AP_AdvancedFailsafe.h>
 #include <APM_Control/APM_Control.h>
