@@ -10222,6 +10222,115 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
 
         self.disarm_vehicle(force=True)
 
+    def EKFBeaconOriginLockOnSourceSwitch(self):
+        '''moveEKFOrigin locks immediately when switching from GPS to beacon XY source'''
+        self.set_parameters({
+            "BCN_TYPE": 10,
+            "BCN_LATITUDE": SITL_START_LOCATION.lat,
+            "BCN_LONGITUDE": SITL_START_LOCATION.lng,
+            "BCN_ALT": SITL_START_LOCATION.alt,
+            "BCN_ORIENT_YAW": 0,
+            "GPS1_TYPE": 1,
+            "SIM_GPS1_ENABLE": 1,  # ensure the SITL simulator actually emits GPS packets
+            "EK3_ENABLE": 1,
+            "EK2_ENABLE": 0,
+            "AHRS_EKF_TYPE": 3,
+
+            "EK3_SRC1_POSXY": 3,  # GPS
+            "EK3_SRC1_POSZ": 1,   # Baro
+            "EK3_SRC1_VELXY": 3,
+            "EK3_SRC1_VELZ": 3,
+            "EK3_SRC1_YAW": 1,
+
+            "EK3_SRC2_POSXY": 4,  # Beacons
+            "EK3_SRC2_POSZ": 1,
+            "EK3_SRC2_VELXY": 0,
+            "EK3_SRC2_VELZ": 0,
+            "EK3_SRC2_YAW": 1
+        })
+        self.reboot_sitl()
+        self.wait_ready_to_arm(require_absolute=True)
+        self.takeoff(10, mode="STABILIZE")
+
+        # Fly North so the EKF origin is displaced far from the beacon origin (at home).
+        # Without the fix, moveEKFOrigin() keeps running for ~4s after the source switch
+        # (using_gps hysteresis), shifting posOffsetNED each cycle.  The further the vehicle
+        # is from home when the switch happens, the larger the per-cycle origin drift and the
+        # more visible the position corruption.
+        self.change_mode("GUIDED")
+        self.fly_guided_move_local(500, 0, 10)
+        self.change_mode("CIRCLE")
+        self.delay_sim_time(5)
+
+        self.context_push()
+        validator = vehicle_test_suite.TestSuite.ValidateGlobalPositionIntAgainstSimState(
+            self, max_allowed_divergence=5
+        )
+        self.install_message_hook_context(validator)
+
+        # Switch to SRC2 (Beacon) via MAVLink command.
+        self.progress("Switching EKF source set 1 (GPS) -> 2 (Beacon)")
+        self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=2)
+
+        # Monitor for 6s: covers the 4-second hysteresis window plus 2s margin
+        self.delay_sim_time(6, reason="position must stay stable through source switch")
+        self.context_pop()
+
+        self.change_mode("LOITER")
+        self.wait_groundspeed(0, 0.3, timeout=60)
+        self.land_and_disarm()
+
+        self.disarm_vehicle(force=True)
+
+    def EKFBeaconPositionOffsetFusion(self):
+        '''posOffsetNED applied with correct sign in FuseRngBcn, not applied in FuseRngBcnStatic'''
+        bcn_loc = self.offset_location_ne(self.home_position_as_mav_location(), 50, 0)
+        self.set_parameters({
+            "BCN_TYPE": 10,
+            "BCN_LATITUDE": bcn_loc.lat,
+            "BCN_LONGITUDE": bcn_loc.lng,
+            "BCN_ALT": SITL_START_LOCATION.alt,
+            "BCN_ORIENT_YAW": 0,
+            "GPS1_TYPE": 1,
+            "SIM_GPS1_ENABLE": 1,  # ensure the SITL simulator actually emits GPS packets
+            "EK3_ENABLE": 1,
+            "EK2_ENABLE": 0,
+            "AHRS_EKF_TYPE": 3,
+
+            "EK3_SRC1_POSXY": 3,  # GPS
+            "EK3_SRC1_POSZ": 1,   # Baro
+            "EK3_SRC1_VELXY": 3,
+            "EK3_SRC1_VELZ": 3,
+            "EK3_SRC1_YAW": 1,
+
+            "EK3_SRC2_POSXY": 4,  # Beacons
+            "EK3_SRC2_POSZ": 1,
+            "EK3_SRC2_VELXY": 0,
+            "EK3_SRC2_VELZ": 0,
+            "EK3_SRC2_YAW": 1
+        })
+        self.reboot_sitl()
+        self.wait_ready_to_arm(require_absolute=True)
+        self.takeoff(10, mode="STABILIZE")
+
+        self.progress("Switching EKF source set 1 (GPS) -> 2 (Beacon)")
+        self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=2)
+
+        self.change_mode("CIRCLE")
+
+        self.context_push()
+        validator = vehicle_test_suite.TestSuite.ValidateGlobalPositionIntAgainstSimState(
+            self, max_allowed_divergence=3
+        )
+        self.install_message_hook_context(validator)
+
+        self.delay_sim_time(10, reason="beacon position offset must be applied correctly")
+        self.context_pop()
+
+        self.change_mode("LOITER")
+        self.wait_groundspeed(0, 0.3, timeout=60)
+        self.land_and_disarm()
+
     def AC_Avoidance_Beacon(self):
         '''Test beacon avoidance slide behaviour'''
         self.context_push()
@@ -14437,6 +14546,8 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         '''return list of all tests'''
         ret = ([
              self.BeaconPosition,
+             self.EKFBeaconOriginLockOnSourceSwitch,
+             self.EKFBeaconPositionOffsetFusion,
              self.RTLSpeed,
              self.Mount,
              self.MountYawVehicleForMountROI,
