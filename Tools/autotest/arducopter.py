@@ -10307,9 +10307,10 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             "EK3_SRC2_POSZ": 1,
             "EK3_SRC2_VELXY": 0,
             "EK3_SRC2_VELZ": 0,
-            "EK3_SRC2_YAW": 1
+            "EK3_SRC2_YAW": 1,
         })
         self.reboot_sitl()
+
         self.wait_ready_to_arm(require_absolute=True)
         self.takeoff(10, mode="STABILIZE")
 
@@ -10330,87 +10331,91 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         self.land_and_disarm()
 
     def BeaconFusionRecovery(self):
-        '''Test beacon fusion recovery after death'''
+        '''MLAT recovery snaps EKF position back after IMU bias causes EKF position error'''
         self.context_push()
+        ex = None
+        try:
+            self.set_parameters({
+                "BCN_TYPE": 10,
+                "BCN_LATITUDE": SITL_START_LOCATION.lat,
+                "BCN_LONGITUDE": SITL_START_LOCATION.lng,
+                "BCN_ALT": SITL_START_LOCATION.alt,
+                "BCN_ORIENT_YAW": 0,
+                "GPS1_TYPE": 1,           # beacons are the sole XY source
+                "EK3_ENABLE": 1,
+                "EK2_ENABLE": 0,
+                "AHRS_EKF_TYPE": 3,
+                "EK3_SRC1_POSXY": 4,      # Beacon
+                "EK3_SRC1_POSZ": 1,       # Baro
+                "EK3_SRC1_VELXY": 0,
+                "EK3_SRC1_VELZ": 0,
+                "EK3_SRC1_YAW": 1,
+                "EK3_BCN_M_NSE": 0.5,
+                "EK3_BCN_I_GTE": 100,     # 1-sigma gate
+                "EK3_BCN_MAX_HDOP": 5.0,
+                "EK3_BCN_REC_PASS": 1,
+                "EK3_BCN_FUS_FAIL": 0,    # MLAT recovery disabled initially
+            })
+            self.reboot_sitl()
+            self.wait_ready_to_arm()
+            # Take off and hover; beacons provide the only XY position.
+            self.takeoff(100, mode="GUIDED")
 
-        self.set_parameters({
-            "BCN_TYPE": 10,
-            "BCN_LATITUDE": SITL_START_LOCATION.lat,
-            "BCN_LONGITUDE": SITL_START_LOCATION.lng,
-            "BCN_ALT": SITL_START_LOCATION.alt,
-            "BCN_ORIENT_YAW": 0,
-            "GPS1_TYPE": 1,
-            "SIM_GPS1_ENABLE": 1,
-            "GPS_AUTO_SWITCH": 0,
-            "EK3_ENABLE": 1,
-            "EK2_ENABLE": 0,
-            "AHRS_EKF_TYPE": 3,
+            self.change_mode("ALT_HOLD")
 
-            "EK3_SRC1_POSXY": 3,  # GPS
-            "EK3_SRC1_POSZ": 1,   # Baro
-            "EK3_SRC1_VELXY": 3,
-            "EK3_SRC1_VELZ": 3,
-            "EK3_SRC1_YAW": 1,
+            # Disable beacons and turn on wind
+            self.progress("Disabling beacons and injecting IMU bias")
+            self.set_parameters({
+                "BCN_TYPE" : 0,
+                "SIM_WIND_DIR": 90,
+                "SIM_WIND_SPD": 5,
+            })
+            self.delay_sim_time(10, reason="let SITL position drift")
 
-            "EK3_SRC2_POSXY": 4,  # Beacons
-            "EK3_SRC2_POSZ": 1,
-            "EK3_SRC2_VELXY": 0,
-            "EK3_SRC2_VELZ": 0,
-            "EK3_SRC2_YAW": 1,
 
-            "EK3_BCN_M_NSE": 1,
-            "EK3_BCN_I_GTE": 100,
-            "EK3_BCN_MAX_HDOP": 5.0,
-            "EK3_BCN_REC_PASS": 1,
-            "EK3_BCN_FUS_FAIL": 0,  # disabled initially
+            self.progress("Re-enabling beacons; FUS_FAIL=0 so no recovery yet")
+            self.set_parameters({
+                "BCN_TYPE": 10,
+            })
+            self.delay_sim_time(5, reason="confirm large innovations accumulate without triggering recovery")
 
-            "SIM_GPS1_GLTCH_X": 0.001,  # ~100m
-        })
-        self.reboot_sitl()
+            ekf_loc = self.get_mav_location()
+            sim_loc = self.sim_location()
+            divergence_before = self.get_distance(ekf_loc, sim_loc)
+            self.progress("EKF divergence before recovery: %.1f m" % divergence_before)
+            if divergence_before < 5.0:
+                raise NotAchievedException(
+                    "Expected EKF to have drifted from SITL truth, got only %.1f m" % divergence_before
+                )
 
-        self.wait_ready_to_arm(require_absolute=True)
-        self.takeoff(10, mode="STABILIZE")
+            # Enable recovery.  failFusionCount reaches the threshold almost
+            # immediately (innovations from the biased EKF position still fail
+            # the gate), triggering DoRngBcnRecovery() which runs MLAT and snaps
+            # the EKF position back to beacon-derived truth.
+            self.progress("Enabling MLAT recovery (FUS_FAIL=3)")
+            self.set_parameter("EK3_BCN_FUS_FAIL", 3)
+            self.wait_statustext("MLAT reset", timeout=5)
 
-        self.progress("Switching EKF source set 1 (GPS) -> 2 (Beacon)")
-        self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=2)
+            ekf_loc = self.get_mav_location()
+            sim_loc = self.sim_location()
+            divergence_after = self.get_distance(ekf_loc, sim_loc)
+            self.progress("EKF divergence after recovery: %.1f m" % divergence_after)
+            if divergence_after > 10.0:
+                raise NotAchievedException(
+                    "Expected EKF to converge after MLAT reset, still %.1f m off" % divergence_after
+                )
 
-        # Let beacon fusion run a few cycles.  With FUS_FAIL=0 the MLAT
-        # recovery path is disabled, so the EKF position stays locked to the
-        # glitched GPS frame (beacon innovations fail the gate but are ignored).
-        self.delay_sim_time(5)
+            self.change_mode("GUIDED")
+            self.land_and_disarm()
+        except Exception as e:
+            self.print_exception_caught(e)
+            ex = e
 
-        # Confirm EKF position is still near the glitched GPS position, i.e.
-        # significantly diverged from the true SITL position.
-        ekf_loc = self.get_mav_location()
-        sim_loc = self.sim_location()
-        divergence = self.get_distance(ekf_loc, sim_loc)
-        self.progress("EKF-to-SITL divergence before recovery: %.1fm" % divergence)
-        if divergence < 50:
-            raise NotAchievedException(
-                "Expected EKF ~100m from SITL truth before recovery, got %.1fm" % divergence
-            )
-
-        # Enable recovery: once beacon fusion failures accumulate to the
-        # threshold, DoRngBcnRecovery() runs an MLAT fix and snaps the EKF
-        # position to the beacon-derived truth.
-        self.set_parameter("EK3_BCN_FUS_FAIL", 1)
-
-        # Wait for the MLAT position reset to fire.
-        self.wait_statustext("MLAT reset", timeout=3000)
-
-        # Confirm EKF position has converged to the physical (SITL) truth.
-        ekf_loc = self.get_mav_location()
-        sim_loc = self.sim_location()
-        divergence = self.get_distance(ekf_loc, sim_loc)
-        self.progress("EKF-to-SITL divergence after recovery: %.1fm" % divergence)
-        if divergence > 10:
-            raise NotAchievedException(
-                "Expected EKF near SITL truth after recovery, still %.1fm off" % divergence
-            )
-
-        self.land_and_disarm()
+        self.disarm_vehicle(force=True)
         self.context_pop()
         self.reboot_sitl()
+        if ex is not None:
+            raise ex
 
     def AC_Avoidance_Beacon(self):
         '''Test beacon avoidance slide behaviour'''

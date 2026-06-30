@@ -19,6 +19,7 @@ import vehicle_test_suite
 
 from pysim import util
 from pysim import vehicleinfo
+from pysim.beacon_sim import SITLBeaconSimulator
 from vehicle_test_suite import MAV_POS_TARGET_TYPE_MASK
 from vehicle_test_suite import AutoTestTimeoutException
 from vehicle_test_suite import NotAchievedException
@@ -3986,6 +3987,251 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         ###################################################################
 
         self.disarm_vehicle(force=True)
+
+    def EKFBeaconOriginLockOnSourceSwitch(self):
+        '''moveEKFOrigin locks immediately when switching from GPS to beacon XY source
+
+        Verifies fix 68fac60140: moveEKFOrigin now returns early when EKF XY source
+        is not GPS, preventing a 4-second window where the origin kept drifting and
+        corrupting posOffsetNED after a GPS-to-beacon source-set switch.
+        '''
+        home = SITL_START_LOCATION
+        spread = 0.002  # ~222 m in latitude, ~181 m in longitude at this location
+        beacons = [
+            (home.lat + spread, home.lng - spread, home.alt),
+            (home.lat + spread, home.lng + spread, home.alt),
+            (home.lat - spread, home.lng - spread, home.alt),
+            (home.lat - spread, home.lng + spread, home.alt),
+        ]
+        ex = None
+        self.context_push()
+        try:
+            self.set_parameters({
+                "EK3_ENABLE": 1,
+                "EK2_ENABLE": 0,
+                "AHRS_EKF_TYPE": 3,
+                "EK3_IMU_MASK": 1,
+                "BCN_TYPE": 4,
+                "BCN_LATITUDE": home.lat,
+                "BCN_LONGITUDE": home.lng,
+                "BCN_ALT": home.alt,
+                # SRC1: GPS
+                "EK3_SRC1_POSXY": 3,
+                "EK3_SRC1_POSZ": 1,
+                "EK3_SRC1_VELXY": 3,
+                "EK3_SRC1_VELZ": 3,
+                "EK3_SRC1_YAW": 1,
+                # SRC2: GPS (fallback — unused in this test)
+                "EK3_SRC2_POSXY": 3,
+                "EK3_SRC2_POSZ": 1,
+                "EK3_SRC2_VELXY": 3,
+                "EK3_SRC2_VELZ": 3,
+                "EK3_SRC2_YAW": 1,
+                # SRC3: Beacon XY, baro Z
+                "EK3_SRC3_POSXY": 4,
+                "EK3_SRC3_POSZ": 1,
+                "EK3_SRC3_VELXY": 0,
+                "EK3_SRC3_VELZ": 0,
+                "EK3_SRC3_YAW": 1,
+                "EK3_BCN_M_NSE": 0.5,
+                "EK3_BCN_I_GTE": 500,
+                "EK3_BCN_MAX_HDOP": 5.0,
+                "GPS1_TYPE": 1,
+            })
+            self.reboot_sitl()
+
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=0.3, rate_hz=10)
+            self.install_message_hook_context(beacon_sim)
+
+            self.wait_ready_to_arm()
+            self.takeoff(alt=50)
+            self.change_mode("LOITER")
+
+            self.progress("Waiting for AP_Beacon_Sine warmup (500 synthetic readings)")
+            self.delay_sim_time(15, reason="AP_Beacon_Sine warmup before real messages are accepted")
+
+            validator = self.ValidateGlobalPositionIntAgainstSimState(
+                self, max_allowed_divergence=3
+            )
+            self.install_message_hook_context(validator)
+
+            self.progress("Switching EKF XY source from GPS (SRC1) to Beacon (SRC3)")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=3)
+
+            self.delay_sim_time(10, reason="observe EKF position during 4 s former hysteresis window")
+        except Exception as e:
+            self.print_exception_caught(e)
+            ex = e
+
+        self.disarm_vehicle(force=True)
+        self.context_pop()
+        self.reboot_sitl()
+        if ex is not None:
+            raise ex
+
+    def EKFBeaconPositionOffsetFusion(self):
+        '''posOffsetNED applied with correct sign in FuseRngBcn, not applied in FuseRngBcnStatic
+
+        Verifies fix bf0fb2ada7: posOffsetNED was applied with += (wrong sign) and
+        applied inside readRngBcnData (too early, before FuseRngBcnStatic sees raw coords).
+        BCN_LATITUDE is offset 20 m north of home so posOffsetNED is non-zero, making
+        the sign bug observable as a 40 m position error.
+        '''
+        home = SITL_START_LOCATION
+        spread = 0.002
+        beacons = [
+            (home.lat + spread, home.lng - spread, home.alt),
+            (home.lat + spread, home.lng + spread, home.alt),
+            (home.lat - spread, home.lng - spread, home.alt),
+            (home.lat - spread, home.lng + spread, home.alt),
+        ]
+        # Offset BCN_LATITUDE 20 m north so posOffsetNED != 0 after GPS establishes EKF origin.
+        # 0.00018 deg latitude ≈ 20 m.  With the sign bug the error doubles to ~40 m.
+        bcn_origin_lat = home.lat + 0.00018
+        ex = None
+        self.context_push()
+        try:
+            self.set_parameters({
+                "EK3_ENABLE": 1,
+                "EK2_ENABLE": 0,
+                "AHRS_EKF_TYPE": 3,
+                "EK3_IMU_MASK": 1,
+                "BCN_TYPE": 4,
+                "BCN_LATITUDE": bcn_origin_lat,
+                "BCN_LONGITUDE": home.lng,
+                "BCN_ALT": home.alt,
+                # SRC1: GPS
+                "EK3_SRC1_POSXY": 3,
+                "EK3_SRC1_POSZ": 1,
+                "EK3_SRC1_VELXY": 3,
+                "EK3_SRC1_VELZ": 3,
+                "EK3_SRC1_YAW": 1,
+                # SRC3: Beacon XY, baro Z
+                "EK3_SRC3_POSXY": 4,
+                "EK3_SRC3_POSZ": 1,
+                "EK3_SRC3_VELXY": 0,
+                "EK3_SRC3_VELZ": 0,
+                "EK3_SRC3_YAW": 1,
+                "EK3_BCN_M_NSE": 0.5,
+                "EK3_BCN_I_GTE": 500,
+                "EK3_BCN_MAX_HDOP": 5.0,
+                "GPS1_TYPE": 1,
+            })
+            self.reboot_sitl()
+
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=0.3, rate_hz=10)
+            self.install_message_hook_context(beacon_sim)
+
+            self.wait_ready_to_arm()
+            self.takeoff(alt=50)
+            self.change_mode("LOITER")
+
+            self.progress("Waiting for AP_Beacon_Sine warmup (500 synthetic readings)")
+            self.delay_sim_time(15, reason="AP_Beacon_Sine warmup")
+
+            validator = self.ValidateGlobalPositionIntAgainstSimState(
+                self, max_allowed_divergence=5
+            )
+            self.install_message_hook_context(validator)
+
+            self.progress("Switching EKF XY source from GPS (SRC1) to Beacon (SRC3); "
+                          "posOffsetNED will be ~20 m (BCN_LAT offset from home)")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=3)
+
+            self.delay_sim_time(15, reason="allow beacon RANGE mode to converge with non-zero posOffsetNED")
+        except Exception as e:
+            self.print_exception_caught(e)
+            ex = e
+
+        self.disarm_vehicle(force=True)
+        self.context_pop()
+        self.reboot_sitl()
+        if ex is not None:
+            raise ex
+
+    def BeaconFusionRecovery(self):
+        '''MLAT recovery fires when RANGE-mode innovations consistently exceed the gate
+
+        Verifies DoRngBcnRecovery() in AP_NavEKF3_RngBcnFusion.cpp: when
+        failFusionCount reaches EK3_BCN_FUS_FAIL, the EKF resets its position via
+        multilateration and emits "MLAT reset" statustext.
+
+        Large beacon noise (2 m) against a tight innovation gate (I_GTE=100 gives a
+        1-sigma gate ~= EK3_BCN_M_NSE = 0.5 m) ensures every RANGE-mode measurement
+        fails the health check once RANGE mode is established, driving failFusionCount
+        to the threshold.
+        '''
+        home = SITL_START_LOCATION
+        spread = 0.002
+        beacons = [
+            (home.lat + spread, home.lng - spread, home.alt),
+            (home.lat + spread, home.lng + spread, home.alt),
+            (home.lat - spread, home.lng - spread, home.alt),
+            (home.lat - spread, home.lng + spread, home.alt),
+        ]
+        ex = None
+        self.context_push()
+        try:
+            self.set_parameters({
+                "EK3_ENABLE": 1,
+                "EK2_ENABLE": 0,
+                "AHRS_EKF_TYPE": 3,
+                "EK3_IMU_MASK": 1,
+                "BCN_TYPE": 4,
+                "BCN_LATITUDE": home.lat,
+                "BCN_LONGITUDE": home.lng,
+                "BCN_ALT": home.alt,
+                # SRC1: GPS
+                "EK3_SRC1_POSXY": 3,
+                "EK3_SRC1_POSZ": 1,
+                "EK3_SRC1_VELXY": 3,
+                "EK3_SRC1_VELZ": 3,
+                "EK3_SRC1_YAW": 1,
+                # SRC3: Beacon XY, baro Z
+                "EK3_SRC3_POSXY": 4,
+                "EK3_SRC3_POSZ": 1,
+                "EK3_SRC3_VELXY": 0,
+                "EK3_SRC3_VELZ": 0,
+                "EK3_SRC3_YAW": 1,
+                "EK3_BCN_M_NSE": 0.5,
+                # I_GTE=100 → gate factor = MAX(0.01*100, 1.0) = 1.0
+                # gate threshold ≈ sqrt(1.0^2 * BCN_M_NSE^2) = 0.5 m
+                # With 2 m actual noise, every measurement fails health
+                "EK3_BCN_I_GTE": 100,
+                "EK3_BCN_MAX_HDOP": 5.0,
+                # Allow recovery after 3 consecutive health=0 measurements
+                "EK3_BCN_FUS_FAIL": 3,
+                "GPS1_TYPE": 1,
+            })
+            self.reboot_sitl()
+
+            # Large noise: innovations will far exceed the 0.5 m gate once RANGE mode starts
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=2.0, rate_hz=10)
+            self.install_message_hook_context(beacon_sim)
+
+            self.wait_ready_to_arm()
+            self.takeoff(alt=50)
+            self.change_mode("LOITER")
+
+            self.progress("Waiting for AP_Beacon_Sine warmup (500 synthetic readings)")
+            self.delay_sim_time(15, reason="AP_Beacon_Sine warmup")
+
+            self.progress("Switching EKF XY source from GPS (SRC1) to Beacon (SRC3)")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=3)
+
+            self.progress("Waiting for STATIC -> RANGE transition then MLAT recovery")
+            self.wait_statustext("MLAT reset", timeout=60)
+            self.progress("MLAT recovery triggered as expected")
+        except Exception as e:
+            self.print_exception_caught(e)
+            ex = e
+
+        self.disarm_vehicle(force=True)
+        self.context_pop()
+        self.reboot_sitl()
+        if ex is not None:
+            raise ex
+
 
     def FenceAltCeilFloor(self):
         '''Tests the fence ceiling and floor'''
@@ -8387,6 +8633,9 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.EKF_STATUS_REPORT,
             self.Deadreckoning,
             self.EKFlaneswitch,
+            self.EKFBeaconOriginLockOnSourceSwitch,
+            self.EKFBeaconPositionOffsetFusion,
+            self.BeaconFusionRecovery,
             self.AirspeedDrivers,
             self.RTL_CLIMB_MIN,
             self.ClimbBeforeTurn,
