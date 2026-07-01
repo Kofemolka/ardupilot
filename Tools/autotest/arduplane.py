@@ -4150,17 +4150,11 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             raise ex
 
     def BeaconFusionRecovery(self):
-        '''MLAT recovery fires when RANGE-mode innovations consistently exceed the gate
+        '''MLAT recovery fires when RANGE-mode innovations consistently exceed the gate'''
+        SRC_GPS = 1
+        SRC_IMU = 2
+        SRC_BCN = 3
 
-        Verifies DoRngBcnRecovery() in AP_NavEKF3_RngBcnFusion.cpp: when
-        failFusionCount reaches EK3_BCN_FUS_FAIL, the EKF resets its position via
-        multilateration and emits "MLAT reset" statustext.
-
-        Large beacon noise (2 m) against a tight innovation gate (I_GTE=100 gives a
-        1-sigma gate ~= EK3_BCN_M_NSE = 0.5 m) ensures every RANGE-mode measurement
-        fails the health check once RANGE mode is established, driving failFusionCount
-        to the threshold.
-        '''
         home = SITL_START_LOCATION
         spread = 0.002
         beacons = [
@@ -4193,42 +4187,83 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 "EK3_SRC3_VELXY": 0,
                 "EK3_SRC3_VELZ": 0,
                 "EK3_SRC3_YAW": 1,
-                "EK3_BCN_M_NSE": 0.5,
-                # I_GTE=100 → gate factor = MAX(0.01*100, 1.0) = 1.0
-                # gate threshold ≈ sqrt(1.0^2 * BCN_M_NSE^2) = 0.5 m
-                # With 2 m actual noise, every measurement fails health
-                "EK3_BCN_I_GTE": 100,
+
+                "EK3_BCN_M_NSE": 5,
+                "EK3_BCN_I_GTE": 300,
                 "EK3_BCN_MAX_HDOP": 5.0,
-                # Allow recovery after 3 consecutive health=0 measurements
-                "EK3_BCN_FUS_FAIL": 3,
+                "EK3_BCN_FUS_FAIL": 0,
+
                 "GPS1_TYPE": 1,
             })
             self.reboot_sitl()
 
-            # Large noise: innovations will far exceed the 0.5 m gate once RANGE mode starts
-            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=2.0, rate_hz=10)
+            # Range noise matches BCN_M_NSE so individual measurements are borderline.
+            # After IMU-drift the accumulated position error (tens to hundreds of metres)
+            # makes innovations far exceed the gate, driving failFusionCount to the
+            # BCN_FUS_FAIL threshold and triggering MLAT recovery.
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=5.0, rate_hz=2)
             self.install_message_hook_context(beacon_sim)
 
             self.wait_ready_to_arm()
-            self.takeoff(alt=50)
-            self.change_mode("LOITER")
-
-            self.progress("Waiting for AP_Beacon_Sine warmup (500 synthetic readings)")
             self.delay_sim_time(15, reason="AP_Beacon_Sine warmup")
 
-            self.progress("Switching EKF XY source from GPS (SRC1) to Beacon (SRC3)")
-            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=3)
+            self.start_flying_simple_relhome_mission([
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 50),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 5000, 0, 50),
+                (mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH, 0, 0, 0),
+            ])
 
-            self.progress("Waiting for STATIC -> RANGE transition then MLAT recovery")
+            self.progress("Switching to IMU")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_IMU)
+
+            self.set_parameters({
+                "SIM_WIND_DIR": 90,
+                "SIM_WIND_SPD": 13
+            })
+
+            self.delay_sim_time(30, reason="Accumulating drift")
+
+            self.progress("Switching to BCN")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_BCN)
+
+            self.delay_sim_time(15, reason="Still drifting")
+
+            ekf_loc = self.get_mav_location()
+            sim_loc = self.sim_location()
+            divergence = self.get_distance(ekf_loc, sim_loc)
+            self.progress("EKF-to-SITL divergence before recovery: %.1fm" % divergence)
+            if divergence < 50:
+                raise NotAchievedException(
+                    "Expected EKF to have drifted from SITL truth before recovery, "
+                    "only %.1fm apart" % divergence
+                )
+
+            self.set_parameter("EK3_BCN_FUS_FAIL", 10)
+
             self.wait_statustext("MLAT reset", timeout=60)
             self.progress("MLAT recovery triggered as expected")
+
+            self.delay_sim_time(5, reason="Wait for position to converge")
+
+            ekf_loc = self.get_mav_location()
+            sim_loc = self.sim_location()
+            divergence = self.get_distance(ekf_loc, sim_loc)
+            self.progress("EKF-to-SITL divergence after recovery: %.1fm" % divergence)
+            if divergence > 50:
+                raise NotAchievedException(
+                    "Expected EKF near SITL truth after MLAT recovery, "
+                    "still %.1fm off" % divergence
+                )
+
+            self.fly_home_land_and_disarm(timeout=180)
+
         except Exception as e:
             self.print_exception_caught(e)
             ex = e
 
         self.disarm_vehicle(force=True)
         self.context_pop()
-        self.reboot_sitl()
+
         if ex is not None:
             raise ex
 
