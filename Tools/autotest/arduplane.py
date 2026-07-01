@@ -4211,7 +4211,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.install_message_hook_context(beacon_sim)
 
             self.wait_ready_to_arm()
-            self.delay_sim_time(15, reason="AP_Beacon_Sine warmup")
+            self.delay_sim_time(15, reason="warmup")
 
             self.start_flying_simple_relhome_mission([
                 (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 50),
@@ -4273,6 +4273,73 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
         if ex is not None:
             raise ex
+        
+    def BeaconWindEstimation(self):
+        '''Tests if wind estimation works on Beacon source'''
+
+        home = SITL_START_LOCATION
+        spread = 0.002
+        beacons = [
+            (home.lat + spread, home.lng - spread, home.alt),
+            (home.lat + spread, home.lng + spread, home.alt),
+            (home.lat - spread, home.lng - spread, home.alt),
+            (home.lat - spread, home.lng + spread, home.alt),
+        ]
+        ex = None
+        self.context_push()
+
+        try:
+            self.set_parameters({
+                "EK3_ENABLE": 1,
+                "EK2_ENABLE": 0,
+                "AHRS_EKF_TYPE": 3,
+                "EK3_IMU_MASK": 1,
+                "BCN_TYPE": 4,
+                # SRC1: BCN
+                "EK3_SRC1_POSXY": 4,
+                "EK3_SRC1_POSZ": 1,
+                "EK3_SRC1_VELXY": 0,
+                "EK3_SRC1_VELZ": 0,
+                "EK3_SRC1_YAW": 1,
+
+                "EK3_BCN_M_NSE": 10,
+                "EK3_BCN_I_GTE": 300,
+
+                "GPS1_TYPE": 1,
+            })
+            self.reboot_sitl()
+
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=1.0, rate_hz=2)
+            self.install_message_hook_context(beacon_sim)
+
+            self.set_parameters({
+                "SIM_WIND_DIR": 45,
+                "SIM_WIND_SPD": 7
+            })
+
+            self.wait_ready_to_arm()
+            self.delay_sim_time(15, reason="warmup")
+
+            self.start_flying_simple_relhome_mission([
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 100),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 1000, 0, 100),
+                (mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM, 0, 0, 100),
+            ])
+
+            self.wait_and_maintain_wind_estimate(7, 45, timeout=240, speed_tolerance=1.0, dir_tolerance=5)
+
+            self.fly_home_land_and_disarm()
+
+        except Exception as e:
+            self.print_exception_caught(e)
+            ex = e
+
+        self.disarm_vehicle(force=True)
+        self.context_pop()
+
+        if ex is not None:
+            raise ex
+
 
     def FenceAltCeilFloor(self):
         '''Tests the fence ceiling and floor'''
@@ -8677,6 +8744,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.EKFBeaconOriginLockOnSourceSwitch,
             self.EKFBeaconPositionOffsetFusion,
             self.BeaconFusionRecovery,
+            self.BeaconWindEstimation,
             self.AirspeedDrivers,
             self.RTL_CLIMB_MIN,
             self.ClimbBeforeTurn,
