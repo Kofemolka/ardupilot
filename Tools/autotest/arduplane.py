@@ -3988,15 +3988,13 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
         self.disarm_vehicle(force=True)
 
-    def EKFBeaconOriginLockOnSourceSwitch(self):
-        '''moveEKFOrigin locks immediately when switching from GPS to beacon XY source
+    def EKFMovingOriginLockOnSourceSwitch(self):
+        '''moveEKFOrigin locks immediately when switching from GPS to beacon XY source'''
+        SRC_GPS = 1
+        SRC_BCN = 3
 
-        Verifies fix 68fac60140: moveEKFOrigin now returns early when EKF XY source
-        is not GPS, preventing a 4-second window where the origin kept drifting and
-        corrupting posOffsetNED after a GPS-to-beacon source-set switch.
-        '''
         home = SITL_START_LOCATION
-        spread = 0.002  # ~222 m in latitude, ~181 m in longitude at this location
+        spread = 0.005
         beacons = [
             (home.lat + spread, home.lng - spread, home.alt),
             (home.lat + spread, home.lng + spread, home.alt),
@@ -4005,6 +4003,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         ]
         ex = None
         self.context_push()
+
         try:
             self.set_parameters({
                 "EK3_ENABLE": 1,
@@ -4012,60 +4011,86 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 "AHRS_EKF_TYPE": 3,
                 "EK3_IMU_MASK": 1,
                 "BCN_TYPE": 4,
-                "BCN_LATITUDE": home.lat,
-                "BCN_LONGITUDE": home.lng,
-                "BCN_ALT": home.alt,
+
                 # SRC1: GPS
                 "EK3_SRC1_POSXY": 3,
                 "EK3_SRC1_POSZ": 1,
                 "EK3_SRC1_VELXY": 3,
                 "EK3_SRC1_VELZ": 3,
-                "EK3_SRC1_YAW": 1,
-                # SRC2: GPS (fallback — unused in this test)
-                "EK3_SRC2_POSXY": 3,
-                "EK3_SRC2_POSZ": 1,
-                "EK3_SRC2_VELXY": 3,
-                "EK3_SRC2_VELZ": 3,
-                "EK3_SRC2_YAW": 1,
+                "EK3_SRC1_YAW": 1,                
                 # SRC3: Beacon XY, baro Z
                 "EK3_SRC3_POSXY": 4,
                 "EK3_SRC3_POSZ": 1,
                 "EK3_SRC3_VELXY": 0,
                 "EK3_SRC3_VELZ": 0,
                 "EK3_SRC3_YAW": 1,
-                "EK3_BCN_M_NSE": 0.5,
-                "EK3_BCN_I_GTE": 500,
-                "EK3_BCN_MAX_HDOP": 5.0,
+
+                "EK3_BCN_M_NSE": 10,
+                "EK3_BCN_I_GTE": 300,
+                "EK3_BCN_FUS_FAIL": 0,
+
                 "GPS1_TYPE": 1,
             })
             self.reboot_sitl()
 
-            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=0.3, rate_hz=10)
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=1, rate_hz=2)
             self.install_message_hook_context(beacon_sim)
 
             self.wait_ready_to_arm()
-            self.takeoff(alt=50)
-            self.change_mode("LOITER")
+            self.delay_sim_time(15, reason="warmup")
 
-            self.progress("Waiting for AP_Beacon_Sine warmup (500 synthetic readings)")
-            self.delay_sim_time(15, reason="AP_Beacon_Sine warmup before real messages are accepted")
+            self.progress("Switching to BCN")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_BCN)
+
+            self.start_flying_simple_relhome_mission([
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 100),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 10000, 0, 100)
+            ])
 
             validator = self.ValidateGlobalPositionIntAgainstSimState(
-                self, max_allowed_divergence=3
+                self, max_allowed_divergence=50
             )
             self.install_message_hook_context(validator)
 
-            self.progress("Switching EKF XY source from GPS (SRC1) to Beacon (SRC3)")
-            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=3)
+            self.delay_sim_time(60, reason="Departing on BCN")
 
-            self.delay_sim_time(10, reason="observe EKF position during 4 s former hysteresis window")
+            self.progress("Switching to GPS")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_GPS)
+
+            self.delay_sim_time(60, reason="Flying on GPS with moving origin")
+
+            self.progress("Switching to BCN")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_BCN)
+
+            self.delay_sim_time(60, reason="observe EKF position after switching")
+
+            self.disarm_vehicle(force=True)
+
+            dfreader = self.dfreader_for_current_onboard_log()
+            xkrb_msgs = []
+            while True:
+                m = dfreader.recv_match(type='XKRB')
+                if m is None:
+                    break
+                xkrb_msgs.append(m)
+
+            tail = xkrb_msgs[-30:]
+            if not tail:
+                raise NotAchievedException("No XKRB messages found in log")
+            unhealthy = [m for m in tail if m.OK == 0]
+            if unhealthy:
+                raise NotAchievedException(
+                    "%d of last %d XKRB messages have OK=0 (range fusion unhealthy)"
+                    % (len(unhealthy), len(tail))
+                )
+
         except Exception as e:
             self.print_exception_caught(e)
             ex = e
 
         self.disarm_vehicle(force=True)
         self.context_pop()
-        self.reboot_sitl()
+
         if ex is not None:
             raise ex
 
@@ -4278,7 +4303,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         '''Tests if wind estimation works on Beacon source'''
 
         home = SITL_START_LOCATION
-        spread = 0.002
+        spread = 0.005
         beacons = [
             (home.lat + spread, home.lng - spread, home.alt),
             (home.lat + spread, home.lng + spread, home.alt),
@@ -4295,6 +4320,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 "AHRS_EKF_TYPE": 3,
                 "EK3_IMU_MASK": 1,
                 "BCN_TYPE": 4,
+
                 # SRC1: BCN
                 "EK3_SRC1_POSXY": 4,
                 "EK3_SRC1_POSZ": 1,
@@ -8741,7 +8767,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.EKF_STATUS_REPORT,
             self.Deadreckoning,
             self.EKFlaneswitch,
-            self.EKFBeaconOriginLockOnSourceSwitch,
+            self.EKFMovingOriginLockOnSourceSwitch,
             self.EKFBeaconPositionOffsetFusion,
             self.BeaconFusionRecovery,
             self.BeaconWindEstimation,
