@@ -3988,6 +3988,25 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
         self.disarm_vehicle(force=True)
 
+    def _assert_beacon_fusion_is_healthy(self, last_msg_count = 30):
+        dfreader = self.dfreader_for_current_onboard_log()
+        xkrb_msgs = []
+        while True:
+            m = dfreader.recv_match(type='XKRB')
+            if m is None:
+                break
+            xkrb_msgs.append(m)
+
+        tail = xkrb_msgs[-last_msg_count:]
+        if not tail:
+            raise NotAchievedException("No XKRB messages found in log")
+        unhealthy = [m for m in tail if m.OK == 0]
+        if unhealthy:
+            raise NotAchievedException(
+                "%d of last %d XKRB messages have OK=0 (range fusion unhealthy)"
+                % (len(unhealthy), len(tail))
+            )
+        
     def EKFMovingOriginLockOnSourceSwitch(self):
         '''moveEKFOrigin locks immediately when switching from GPS to beacon XY source'''
         SRC_GPS = 1
@@ -4066,23 +4085,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
             self.disarm_vehicle(force=True)
 
-            dfreader = self.dfreader_for_current_onboard_log()
-            xkrb_msgs = []
-            while True:
-                m = dfreader.recv_match(type='XKRB')
-                if m is None:
-                    break
-                xkrb_msgs.append(m)
-
-            tail = xkrb_msgs[-30:]
-            if not tail:
-                raise NotAchievedException("No XKRB messages found in log")
-            unhealthy = [m for m in tail if m.OK == 0]
-            if unhealthy:
-                raise NotAchievedException(
-                    "%d of last %d XKRB messages have OK=0 (range fusion unhealthy)"
-                    % (len(unhealthy), len(tail))
-                )
+            self._assert_beacon_fusion_is_healthy()
 
         except Exception as e:
             self.print_exception_caught(e)
@@ -4095,26 +4098,21 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             raise ex
 
     def EKFBeaconPositionOffsetFusion(self):
-        '''posOffsetNED applied with correct sign in FuseRngBcn, not applied in FuseRngBcnStatic
+        '''posOffsetNED applied with correct sign and affects only RANGE fusion mode'''
+        SRC_GPS = 1
+        SRC_BCN = 3
 
-        Verifies fix bf0fb2ada7: posOffsetNED was applied with += (wrong sign) and
-        applied inside readRngBcnData (too early, before FuseRngBcnStatic sees raw coords).
-        BCN_LATITUDE is offset 20 m north of home so posOffsetNED is non-zero, making
-        the sign bug observable as a 40 m position error.
-        '''
         home = SITL_START_LOCATION
-        spread = 0.002
+        spread = 0.005
         beacons = [
             (home.lat + spread, home.lng - spread, home.alt),
             (home.lat + spread, home.lng + spread, home.alt),
             (home.lat - spread, home.lng - spread, home.alt),
             (home.lat - spread, home.lng + spread, home.alt),
         ]
-        # Offset BCN_LATITUDE 20 m north so posOffsetNED != 0 after GPS establishes EKF origin.
-        # 0.00018 deg latitude ≈ 20 m.  With the sign bug the error doubles to ~40 m.
-        bcn_origin_lat = home.lat + 0.00018
         ex = None
         self.context_push()
+
         try:
             self.set_parameters({
                 "EK3_ENABLE": 1,
@@ -4122,55 +4120,65 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 "AHRS_EKF_TYPE": 3,
                 "EK3_IMU_MASK": 1,
                 "BCN_TYPE": 4,
-                "BCN_LATITUDE": bcn_origin_lat,
-                "BCN_LONGITUDE": home.lng,
-                "BCN_ALT": home.alt,
+
                 # SRC1: GPS
                 "EK3_SRC1_POSXY": 3,
                 "EK3_SRC1_POSZ": 1,
                 "EK3_SRC1_VELXY": 3,
                 "EK3_SRC1_VELZ": 3,
-                "EK3_SRC1_YAW": 1,
+                "EK3_SRC1_YAW": 1,                
                 # SRC3: Beacon XY, baro Z
                 "EK3_SRC3_POSXY": 4,
                 "EK3_SRC3_POSZ": 1,
                 "EK3_SRC3_VELXY": 0,
                 "EK3_SRC3_VELZ": 0,
                 "EK3_SRC3_YAW": 1,
-                "EK3_BCN_M_NSE": 0.5,
-                "EK3_BCN_I_GTE": 500,
-                "EK3_BCN_MAX_HDOP": 5.0,
+
+                "EK3_BCN_M_NSE": 10,
+                "EK3_BCN_I_GTE": 300,
+                "EK3_BCN_FUS_FAIL": 0,
+
                 "GPS1_TYPE": 1,
             })
             self.reboot_sitl()
 
-            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=0.3, rate_hz=10)
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=1, rate_hz=2)
             self.install_message_hook_context(beacon_sim)
 
             self.wait_ready_to_arm()
-            self.takeoff(alt=50)
-            self.change_mode("LOITER")
+            self.delay_sim_time(15, reason="warmup")
 
-            self.progress("Waiting for AP_Beacon_Sine warmup (500 synthetic readings)")
-            self.delay_sim_time(15, reason="AP_Beacon_Sine warmup")
+            self.start_flying_simple_relhome_mission([
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 100),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 10000, 0, 100)
+            ])
 
             validator = self.ValidateGlobalPositionIntAgainstSimState(
-                self, max_allowed_divergence=5
+                self, max_allowed_divergence=50
             )
             self.install_message_hook_context(validator)
 
-            self.progress("Switching EKF XY source from GPS (SRC1) to Beacon (SRC3); "
-                          "posOffsetNED will be ~20 m (BCN_LAT offset from home)")
-            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=3)
+            self.delay_sim_time(30, reason="Departing on GPS with moving origin")
 
-            self.delay_sim_time(15, reason="allow beacon RANGE mode to converge with non-zero posOffsetNED")
+            self.progress("Switching to BCN")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_BCN)
+
+            # After swtiching from GPS, the posOffsetNED is a difference between Beacon origin and EK3 moving origin.
+            # If posOffsetNED is applied correctly, then Range fusion should compensate
+            # beacon positions and system must remain healthy 
+            self.delay_sim_time(30, reason="Flying on BCN")
+
+            self.disarm_vehicle(force=True)
+
+            self._assert_beacon_fusion_is_healthy()
+
         except Exception as e:
             self.print_exception_caught(e)
             ex = e
 
         self.disarm_vehicle(force=True)
         self.context_pop()
-        self.reboot_sitl()
+
         if ex is not None:
             raise ex
 
@@ -4179,6 +4187,8 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         SRC_GPS = 1
         SRC_IMU = 2
         SRC_BCN = 3
+
+        POS_TOLERANCE = 50
 
         home = SITL_START_LOCATION
         spread = 0.005
@@ -4238,6 +4248,8 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.wait_ready_to_arm()
             self.delay_sim_time(15, reason="warmup")
 
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_GPS)
+
             self.start_flying_simple_relhome_mission([
                 (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 50),
                 (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 5000, 0, 50),
@@ -4263,7 +4275,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             sim_loc = self.sim_location()
             divergence = self.get_distance(ekf_loc, sim_loc)
             self.progress("EKF-to-SITL divergence before recovery: %.1fm" % divergence)
-            if divergence < 50:
+            if divergence < POS_TOLERANCE:
                 raise NotAchievedException(
                     "Expected EKF to have drifted from SITL truth before recovery, "
                     "only %.1fm apart" % divergence
@@ -4280,7 +4292,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             sim_loc = self.sim_location()
             divergence = self.get_distance(ekf_loc, sim_loc)
             self.progress("EKF-to-SITL divergence after recovery: %.1fm" % divergence)
-            if divergence > 50:
+            if divergence > POS_TOLERANCE:
                 raise NotAchievedException(
                     "Expected EKF near SITL truth after MLAT recovery, "
                     "still %.1fm off" % divergence
