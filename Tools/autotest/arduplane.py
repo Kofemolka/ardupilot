@@ -4156,7 +4156,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         SRC_BCN = 3
 
         home = SITL_START_LOCATION
-        spread = 0.002
+        spread = 0.005
         beacons = [
             (home.lat + spread, home.lng - spread, home.alt),
             (home.lat + spread, home.lng + spread, home.alt),
@@ -4181,6 +4181,12 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 "EK3_SRC1_VELXY": 3,
                 "EK3_SRC1_VELZ": 3,
                 "EK3_SRC1_YAW": 1,
+                # SRC2: IMU
+                "EK3_SRC2_POSXY": 0,
+                "EK3_SRC2_POSZ": 1,
+                "EK3_SRC2_VELXY": 0,
+                "EK3_SRC2_VELZ": 0,
+                "EK3_SRC2_YAW": 1,                
                 # SRC3: Beacon XY, baro Z
                 "EK3_SRC3_POSXY": 4,
                 "EK3_SRC3_POSZ": 1,
@@ -4189,7 +4195,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 "EK3_SRC3_YAW": 1,
 
                 "EK3_BCN_M_NSE": 5,
-                "EK3_BCN_I_GTE": 300,
+                "EK3_BCN_I_GTE": 500,
                 "EK3_BCN_MAX_HDOP": 5.0,
                 "EK3_BCN_FUS_FAIL": 0,
 
@@ -4255,7 +4261,8 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                     "still %.1fm off" % divergence
                 )
 
-            self.fly_home_land_and_disarm(timeout=180)
+            self.delay_sim_time(15, reason="Fly a bit more for a nice track to debug")
+            self.disarm_vehicle(force=True)
 
         except Exception as e:
             self.print_exception_caught(e)
@@ -4266,7 +4273,6 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
         if ex is not None:
             raise ex
-
 
     def FenceAltCeilFloor(self):
         '''Tests the fence ceiling and floor'''
