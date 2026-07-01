@@ -8,178 +8,192 @@ import math
 import random
 import struct
 
+from pymavlink import mavutil
+from pymavlink.dialects.v20.ardupilotmega import MAVLink_message as _MAVLink_message
+
 
 _MAV_COMP_ID_USER66 = 90        # AP_Beacon_Sine filter requires this component ID
-_MAVLINK_MSG_ID_RANGING_BEACON = 513   # development.xml ID
 _BEACON_SIM_SYSID = 200         # source system ID used in outgoing packets
 
 
-def _x25crc(buf):
-    crc = 0xFFFF
-    for b in (buf.encode() if isinstance(buf, str) else buf):
-        tmp = b ^ (crc & 0xFF)
-        tmp = (tmp ^ (tmp << 4)) & 0xFF
-        crc = ((crc >> 8) ^ (tmp << 8) ^ (tmp << 3) ^ (tmp >> 4)) & 0xFFFF
-    return crc
+# Copied from /home/kofe/src/poc/copilot/ranges.py — only struct and MAVLink_message needed.
+class MAVLink_ranging_beacon_message(_MAVLink_message):
+    id       = 513
+    msgname  = 'RANGING_BEACON'
+    fieldnames = [
+        'time_usec', 'target_system', 'target_component', 'beacon_id',
+        'range', 'lat', 'lon', 'alt', 'alt_type',
+        'hacc_est', 'vacc_est', 'carrier_freq', 'range_accuracy',
+        'sequence', 'status',
+    ]
+    ordered_fieldnames = [
+        'time_usec', 'range', 'lat', 'lon', 'alt',
+        'hacc_est', 'vacc_est', 'range_accuracy',
+        'beacon_id', 'carrier_freq',
+        'target_system', 'target_component', 'alt_type', 'sequence', 'status',
+    ]
+    fieldtypes = [
+        'uint64_t', 'uint8_t', 'uint8_t', 'uint16_t',
+        'uint32_t', 'int32_t', 'int32_t', 'float', 'uint8_t',
+        'uint32_t', 'uint32_t', 'uint16_t', 'uint32_t',
+        'uint8_t', 'uint8_t',
+    ]
+    fielddisplays_by_name: dict = {}
+    fieldenums_by_name:    dict = {}
+    fieldunits_by_name:    dict = {}
+    native_format = bytearray(b'<QIiifIIIHHBBBBB')
+    orders = [0, 10, 11, 8, 1, 2, 3, 4, 12, 5, 6, 9, 7, 13, 14]
+    lengths       = [1] * 15
+    array_lengths = [0] * 15
+    crc_extra = 99
+    unpacker = struct.Struct('<QIiifIIIHHBBBBB')
+    instance_field  = None
+    instance_offset = -1
 
+    def __init__(self, time_usec, target_system, target_component, beacon_id,
+                 range, lat, lon, alt, alt_type,
+                 hacc_est, vacc_est, carrier_freq, range_accuracy,
+                 sequence, status):
+        _MAVLink_message.__init__(self, self.id, self.msgname)
+        self._fieldnames      = self.fieldnames
+        self._instance_field  = self.instance_field
+        self._instance_offset = self.instance_offset
+        self.time_usec        = time_usec
+        self.target_system    = target_system
+        self.target_component = target_component
+        self.beacon_id        = beacon_id
+        self.range            = range
+        self.lat              = lat
+        self.lon              = lon
+        self.alt              = alt
+        self.alt_type         = alt_type
+        self.hacc_est         = hacc_est
+        self.vacc_est         = vacc_est
+        self.carrier_freq     = carrier_freq
+        self.range_accuracy   = range_accuracy
+        self.sequence         = sequence
+        self.status           = status
 
-def _x25crc_accumulate_byte(crc, b):
-    tmp = b ^ (crc & 0xFF)
-    tmp = (tmp ^ (tmp << 4)) & 0xFF
-    return ((crc >> 8) ^ (tmp << 8) ^ (tmp << 3) ^ (tmp >> 4)) & 0xFFFF
-
-
-def _crc_extra(msg_name, wire_order_fields):
-    '''Compute MAVLink CRC_EXTRA for a message.
-
-    Per pymavlink generator/mavparse.py message_checksum(), the accumulation
-    runs over msg_name + space, then each field in WIRE ORDER (sorted by type
-    size, declaration-order tiebreak within each size group), not declaration order.
-    '''
-    crc = _x25crc(msg_name + ' ')
-    for ftype, fname in wire_order_fields:
-        for b in (ftype + ' ').encode():
-            crc = _x25crc_accumulate_byte(crc, b)
-        for b in (fname + ' ').encode():
-            crc = _x25crc_accumulate_byte(crc, b)
-    return (crc & 0xFF) ^ (crc >> 8)
-
-
-# RANGING_BEACON fields in wire order (sorted by type size, declaration-order tiebreak)
-# This matches the C struct layout in mavlink_msg_ranging_beacon.h and gives CRC_EXTRA = 99.
-_RANGING_BEACON_WIRE_FIELDS = [
-    ('uint64_t', 'time_usec'),    # 8 bytes
-    ('uint32_t', 'range'),        # 4 bytes
-    ('int32_t',  'lat'),          # 4 bytes
-    ('int32_t',  'lon'),          # 4 bytes
-    ('float',    'alt'),          # 4 bytes
-    ('uint32_t', 'hacc_est'),     # 4 bytes
-    ('uint32_t', 'vacc_est'),     # 4 bytes
-    ('uint32_t', 'range_accuracy'),  # 4 bytes
-    ('uint16_t', 'beacon_id'),    # 2 bytes
-    ('uint16_t', 'carrier_freq'), # 2 bytes
-    ('uint8_t',  'target_system'),  # 1 byte
-    ('uint8_t',  'target_component'),  # 1 byte
-    ('uint8_t',  'alt_type'),     # 1 byte
-    ('uint8_t',  'sequence'),     # 1 byte
-    ('uint8_t',  'status'),       # 1 byte
-]
-_RANGING_BEACON_CRC_EXTRA = _crc_extra('RANGING_BEACON', _RANGING_BEACON_WIRE_FIELDS)  # == 99
-
-
-def _haversine_m(lat1, lng1, lat2, lng2):
-    '''Horizontal great-circle distance in metres between two WGS84 points.'''
-    R = 6371008.8
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlam = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
-    return R * 2 * math.asin(math.sqrt(a))
+    def pack(self, mav, force_mavlink1=False):
+        return self._pack(mav, self.crc_extra,
+            self.unpacker.pack(
+                self.time_usec, self.range, self.lat, self.lon, self.alt,
+                self.hacc_est, self.vacc_est, self.range_accuracy,
+                self.beacon_id, self.carrier_freq,
+                self.target_system, self.target_component,
+                self.alt_type, self.sequence, self.status,
+            ),
+            force_mavlink1=force_mavlink1,
+        )
 
 
 class SITLBeaconSimulator:
     '''Simulate RANGING_BEACON MAVLink messages for AP_Beacon_Sine (BCN_TYPE=4).
 
-    Install as a message hook via vehicle.install_message_hook_context(sim).
-    Fires synchronously in the main test thread on every GLOBAL_POSITION_INT —
-    no background thread, no locking required.
+    Install as a message hook via suite.install_message_hook_context(sim).
+    Fires on every received MAVLink message but uses sim-time rate limiting so
+    beacons are emitted at a regular interval independent of which messages arrive.
 
+    Vehicle position is read from pymavlink's message cache (SIMSTATE for lat/lng,
+    SIM_STATE for MSL altitude) — safe to use from within a hook without re-entering
+    recv_match/parse_char.
+
+    suite:         TestSuite instance (provides get_distance(), get_sim_time_cached(),
+                   and mav.write())
     beacons:       list of up to 4 (lat_deg, lon_deg, alt_m_MSL) tuples
-    noise_sigma_m: 1σ Gaussian range noise added to each measurement (metres)
-    rate_hz:       per-beacon message rate in simulation Hz
+    noise_sigma_m: 1-sigma Gaussian range noise added to each measurement (metres)
+    rate_hz:       full cycle rate in simulation Hz — total messages per second is
+                   rate_hz * len(beacons), evenly spaced in round-robin order.
+                   Example: 4 beacons at 2 Hz → 8 messages/s, one every 125 ms.
     '''
 
-    def __init__(self, vehicle, beacons, noise_sigma_m=0.5, rate_hz=10.0):
+    def __init__(self, suite, beacons, noise_sigma_m=0.5, rate_hz=10.0):
         if len(beacons) > 4:
             raise ValueError("AP_Beacon supports at most 4 beacons (AP_BEACON_MAX_BEACONS=4)")
-        self._vehicle = vehicle
+        self._suite = suite
         self._beacons = list(beacons)
         self._noise_sigma_m = noise_sigma_m
         self._rate_hz = rate_hz
         self._seq = 0
-        self._last_sent = {}   # beacon_idx -> last sim-time float
+        self._next_beacon = 0          # round-robin index
+        self._next_send_time = None    # sim-time of next scheduled send (set on first call)
 
     def __call__(self, mav, msg):
         '''Message hook entry point — called for every received MAVLink message.'''
-        if msg.get_type() != 'GLOBAL_POSITION_INT':
+        sim_now = self._suite.get_sim_time_cached()
+
+        # Initialise schedule on the very first call
+        if self._next_send_time is None:
+            self._next_send_time = sim_now
             return
-        # Skip uninitialized GPS frames (before SITL establishes a position fix)
-        if msg.lat == 0 and msg.lon == 0:
+
+        if sim_now < self._next_send_time:
             return
 
-        veh_lat = msg.lat * 1e-7   # degE7 → degrees
-        veh_lng = msg.lon * 1e-7
-        veh_alt = msg.alt * 1e-3   # mm → m MSL
+        # Read physical SITL truth from pymavlink's message cache.
+        # mav.messages is populated before hooks are called so this is safe to
+        # use from within a hook — it never re-enters recv_match/parse_char.
+        simstate = self._suite.mav.messages.get('SIMSTATE')
+        if simstate is None:
+            return
+        veh_lat = simstate.lat * 1e-7
+        veh_lng = simstate.lng * 1e-7
 
-        sim_now = self._vehicle.get_sim_time_cached()
-        interval = 1.0 / self._rate_hz
+        # Baro-derived EKF alt closely tracks physical truth for ranging purposes.
+        gpi = self._suite.mav.messages.get('GLOBAL_POSITION_INT')
+        veh_alt = gpi.alt * 1e-3 if gpi is not None else 0.0  # mm → m MSL
+        veh_loc = mavutil.location(veh_lat, veh_lng, veh_alt, 0)
 
-        for i, (blat, blon, balt) in enumerate(self._beacons):
-            if sim_now - self._last_sent.get(i, -999.0) < interval:
-                continue
-            self._last_sent[i] = sim_now
+        # Send the next beacon in round-robin order
+        i = self._next_beacon
+        blat, blon, balt = self._beacons[i]
 
-            h = _haversine_m(veh_lat, veh_lng, blat, blon)
-            v = veh_alt - balt
-            range_m = math.sqrt(h * h + v * v)
-            if self._noise_sigma_m > 0:
-                range_m += random.gauss(0, self._noise_sigma_m)
-            range_m = max(0.1, range_m)
+        bcn_loc = mavutil.location(blat, blon, balt, 0)
+        h = self._suite.get_distance(veh_loc, bcn_loc)   # horizontal (m)
+        v = veh_alt - balt                                 # vertical (m)
+        range_m = math.sqrt(h * h + v * v)
+        if self._noise_sigma_m > 0:
+            range_m += random.gauss(0, self._noise_sigma_m)
+        range_m = max(0.1, range_m)
 
-            self._seq = (self._seq + 1) & 0xFF
-            self._send(i, range_m, blat, blon, balt)
+        self._seq = (self._seq + 1) & 0xFF
+        self._send(i, range_m, blat, blon, balt)
+
+        # Advance round-robin and schedule the next send
+        self._next_beacon = (i + 1) % len(self._beacons)
+        self._next_send_time += 1.0 / (self._rate_hz * len(self._beacons))
 
     def _send(self, beacon_id, range_m, blat, blon, balt):
-        '''Build and send a raw MAVLink 2.0 RANGING_BEACON frame.
-
-        Wire field order (sorted by type size, declaration-order tiebreak):
-          Q time_usec | I range | i lat | i lon | f alt |
-          I hacc_est | I vacc_est | I range_accuracy |
-          H beacon_id | H carrier_freq |
-          B target_system | B target_component | B alt_type | B sequence | B status
-        Total payload: 45 bytes; total frame: 57 bytes.
-        '''
-        range_mm = min(int(range_m * 1000), 0xFFFFFFFF)  # clamp to uint32 max
-        payload = struct.pack(
-            '<QIiifIIIHHBBBBB',
-            0,                                        # time_usec
-            range_mm,                                 # range (mm)
-            int(blat * 1e7),                          # lat (degE7)
-            int(blon * 1e7),                          # lon (degE7)
-            float(balt),                              # alt (m MSL)
-            0,                                        # hacc_est (mm)
-            0,                                        # vacc_est (mm)
-            int(self._noise_sigma_m * 1000),          # range_accuracy (mm)
-            beacon_id & 0xFFFF,                       # beacon_id
-            0,                                        # carrier_freq
-            1,                                        # target_system
-            _MAV_COMP_ID_USER66,                      # target_component = 90
-            0,                                        # alt_type = 0 (WGS84)
-            self._seq,                                # sequence
-            0,                                        # status
+        msg = MAVLink_ranging_beacon_message(
+            0,                                    # time_usec
+            1,                                    # target_system
+            _MAV_COMP_ID_USER66,                  # target_component
+            beacon_id,                            # beacon_id
+            min(int(range_m * 1000), 0xFFFFFFFF), # range (mm), clamped to uint32
+            int(blat * 1e7),                      # lat (degE7)
+            int(blon * 1e7),                      # lon (degE7)
+            float(balt),                          # alt (m MSL)
+            0,                                    # alt_type = WGS84
+            0,                                    # hacc_est
+            0,                                    # vacc_est
+            0,                                    # carrier_freq
+            int(self._noise_sigma_m * 1000),      # range_accuracy (mm)
+            self._seq,                            # sequence
+            0,                                    # status
         )
 
-        mid = _MAVLINK_MSG_ID_RANGING_BEACON          # 513
-        header = bytes([
-            0xFD,                                     # STX (MAVLink 2.0)
-            len(payload),                             # LEN
-            0x00,                                     # INCOMPAT flags
-            0x00,                                     # COMPAT flags
-            self._seq,                                # SEQ
-            _BEACON_SIM_SYSID,                        # SYSID
-            _MAV_COMP_ID_USER66,                      # COMPID
-            mid & 0xFF,                               # MSGID byte 0
-            (mid >> 8) & 0xFF,                        # MSGID byte 1
-            (mid >> 16) & 0xFF,                       # MSGID byte 2
-        ])
-
-        # CRC-16/X.25 over bytes 1..end_of_payload (everything after STX)
-        crc = _x25crc(header[1:] + payload)
-        # Accumulate the message-specific CRC_EXTRA byte
-        crc = _x25crc_accumulate_byte(crc, _RANGING_BEACON_CRC_EXTRA)
-        packet = header + payload + struct.pack('<H', crc)
-
+        # Pack using the MAVLink protocol object so sysid/compid/seq are set
+        # correctly in the frame header. Temporarily override src fields so the
+        # packet appears to come from the beacon peripheral (sysid=200, comp=90).
+        mav_proto = self._suite.mav.mav
+        old_sys  = mav_proto.srcSystem
+        old_comp = mav_proto.srcComponent
         try:
-            self._vehicle.mav.write(packet)
+            mav_proto.srcSystem    = _BEACON_SIM_SYSID
+            mav_proto.srcComponent = _MAV_COMP_ID_USER66
+            self._suite.mav.write(msg.pack(mav_proto))
         except Exception:
             pass
+        finally:
+            mav_proto.srcSystem    = old_sys
+            mav_proto.srcComponent = old_comp
