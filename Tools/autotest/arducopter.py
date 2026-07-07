@@ -7,9 +7,11 @@ AP_FLAKE8_CLEAN
 from __future__ import annotations
 
 import copy
+import json
 import math
 import os
 import pathlib
+import random
 import re
 import shutil
 import tempfile
@@ -28,6 +30,7 @@ import vehicle_test_suite
 
 from pysim import util
 from pysim import vehicleinfo
+from pysim.beacon_sim import SITLBeaconSimulator
 from vehicle_test_suite import MAV_POS_TARGET_TYPE_MASK
 from vehicle_test_suite import AutoTestTimeoutException
 from vehicle_test_suite import NotAchievedException
@@ -46,6 +49,53 @@ SITL_START_LOCATION = mavutil.location(
     584.0805053710938,
     270
 )
+
+# Beacon-stability parameter sweep: one entry per parameter group. Values that
+# come in a pair (e.g. the E/D filter halves of one signal path) are set
+# together on each iteration. See Tools/autotest/analyze_beacon_stability.py
+# for the offline log analysis that consumes the BIN logs this sweep produces.
+BEACON_STABILITY_SWEEP_PARAMS = [
+    {
+        "param_names": ("EK3_BCN_M_NSE",),
+        "values": [50, 100, 150, 200, 250, 300, 350, 400],
+        "log_subdir": "EK3_BCN_M_NSE",
+    },
+    {
+        "param_names": ("EK3_ACC_P_NSE",),
+        "values": [0.1, 0.2, 0.35, 0.7, 1.4, 2.8],
+        "log_subdir": "EK3_ACC_P_NSE",
+    },
+    {
+        "param_names": ("PSC_NE_VEL_FLTE", "PSC_NE_VEL_FLTD"),
+        "values": [0, 2, 5, 10, 20, 50],
+        "log_subdir": "PSC_NE_VEL_FLT",
+    },
+    {
+        "param_names": ("ATC_RAT_RLL_FLTE", "ATC_RAT_PIT_FLTE"),
+        "values": [0, 5, 10, 20, 40, 80],
+        "log_subdir": "ATC_RAT_FLTE",
+    },
+    {
+        "param_names": ("ATC_INPUT_TC",),
+        "values": [0.05, 0.10, 0.15, 0.20, 0.30, 0.50],
+        "log_subdir": "ATC_INPUT_TC",
+    },
+    {
+        "param_names": ("PSC_JERK_NE",),
+        "values": [1, 2.5, 5, 10, 20, 40],
+        "log_subdir": "PSC_JERK_NE",
+    },
+    {
+        "param_names": ("PSC_NE_POS_P",),
+        "values": [0.5, 0.75, 1.0, 1.5, 2.5, 4.0],
+        "log_subdir": "PSC_NE_POS_P",
+    },
+]
+
+
+def beacon_stability_value_tag(value):
+    '''filesystem-safe token for a swept parameter value, e.g. 1.0 -> "1p0", -0.5 -> "neg0p5"'''
+    return ("%g" % value).replace('-', 'neg').replace('.', 'p')
 
 # Flight mode switch positions are set-up in arducopter.param to be
 #   switch 1 = Circle
@@ -10385,6 +10435,182 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             self.reboot_sitl()
             self.fly_beacon_position(old_pos)
 
+    def beacon_stability_corners(self, home, spread_m=1500):
+        '''4 corner beacon positions bracketing the beacon-stability sweep flight leg'''
+        offsets = [
+            (spread_m, spread_m),
+            (spread_m, -spread_m),
+            (-spread_m, spread_m),
+            (-spread_m, -spread_m),
+        ]
+        corners = []
+        for north_m, east_m in offsets:
+            loc = self.offset_location_ne(home, north_m, east_m)
+            corners.append((loc.lat, loc.lng, home.alt))
+        return corners
+
+    def fly_beacon_stability_leg(self):
+        '''takeoff to 50m and fly 1km north in GUIDED, for beacon-stability
+        parameter sweeps; log capture is the caller's job'''
+        self.takeoff(50, mode='GUIDED')
+        target = self.offset_location_heading_distance(self.mav.location(), 0, 1000)
+        self.fly_guided_move_to(target, timeout=180)
+        self.land_and_disarm()
+
+    def BeaconStabilitySweep_generic(self, sweep_param):
+        '''fly the beacon-stability leg once per value in sweep_param, saving
+        a BIN log + JSON sidecar per run under logs/beacon_stability/<log_subdir>/.
+        A run that times out or errors is still logged (with a status field
+        in its sidecar) rather than aborting the rest of the sweep.'''
+        param_names = sweep_param["param_names"]
+        values = sweep_param["values"]
+        log_subdir = sweep_param["log_subdir"]
+
+        # Get the home/beacon reference position while still on the default
+        # (GPS) position source -- switching to Beacon first and then trying
+        # to poll home position fails, since no beacon data is flowing yet
+        # and the EKF has nothing to report a position from.
+        self.reboot_sitl()
+        self.wait_ready_to_arm(require_absolute=True)
+        home = self.home_position_as_mav_location()
+        beacons = self.beacon_stability_corners(home)
+
+        self.set_parameters({
+            "EK3_ENABLE": 1,
+            "EK2_ENABLE": 0,
+            "AHRS_EKF_TYPE": 3,
+            "EK3_IMU_MASK": 1,
+            "BCN_TYPE": 4,
+
+            # SRC1: BCN
+            "EK3_SRC1_POSXY": 4,
+            "EK3_SRC1_POSZ": 1,
+            "EK3_SRC1_VELXY": 0,
+            "EK3_SRC1_VELZ": 0,
+            "EK3_SRC1_YAW": 1,
+
+            "GPS1_TYPE": 1,
+            "SIM_WIND_SPD": 0,
+        })
+
+        out_dir = os.path.join("logs", "beacon_stability", log_subdir)
+        os.makedirs(out_dir, exist_ok=True)
+
+        for i, value in enumerate(values):
+            self.start_subtest("%s = %s" % (",".join(param_names), value))
+            self.set_parameters({p: value for p in param_names})
+            self.reboot_sitl()
+
+            random.seed(0xBEAC0 + i)
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=0.5, rate_hz=10.0)
+            self.install_message_hook(beacon_sim)
+
+            status = "completed"
+            try:
+                self.wait_ready_to_arm()
+                self.delay_sim_time(15, reason="beacon/EKF warmup")
+                self.fly_beacon_stability_leg()
+            except (AutoTestTimeoutException, NotAchievedException) as e:
+                self.progress("beacon stability leg did not complete: %s" % str(e))
+                status = "timed_out"
+                self.disarm_vehicle(force=True)
+            except Exception as e:
+                self.progress("beacon stability leg failed: %s" % str(e))
+                status = "error"
+                self.disarm_vehicle(force=True)
+            finally:
+                self.remove_message_hook(beacon_sim)
+
+            value_tag = beacon_stability_value_tag(value)
+            src = self.current_onboard_log_filepath()
+            dest_bin = os.path.join(out_dir, "%s.BIN" % value_tag)
+            shutil.copy(src, dest_bin)
+
+            meta = {
+                "param_names": list(param_names),
+                "value": value,
+                "status": status,
+                "log_path": dest_bin,
+                "home_lat": home.lat,
+                "home_lng": home.lng,
+            }
+            with open(os.path.join(out_dir, "%s.json" % value_tag), "w") as f:
+                json.dump(meta, f, indent=2)
+
+    def BeaconStabilitySweepEK3BcnMNse(self):
+        '''Sweep EK3_BCN_M_NSE and record beacon-stability logs'''
+        self.context_push()
+        try:
+            self.BeaconStabilitySweep_generic(BEACON_STABILITY_SWEEP_PARAMS[0])
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
+    def BeaconStabilitySweepEK3AccPNse(self):
+        '''Sweep EK3_ACC_P_NSE and record beacon-stability logs'''
+        self.context_push()
+        try:
+            self.BeaconStabilitySweep_generic(BEACON_STABILITY_SWEEP_PARAMS[1])
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
+    def BeaconStabilitySweepPscNeVelFlt(self):
+        '''Sweep PSC_NE_VEL_FLTE/FLTD and record beacon-stability logs'''
+        self.context_push()
+        try:
+            self.BeaconStabilitySweep_generic(BEACON_STABILITY_SWEEP_PARAMS[2])
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
+    def BeaconStabilitySweepAtcRatFlte(self):
+        '''Sweep ATC_RAT_RLL/PIT_FLTE and record beacon-stability logs'''
+        self.context_push()
+        try:
+            self.BeaconStabilitySweep_generic(BEACON_STABILITY_SWEEP_PARAMS[3])
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
+    def BeaconStabilitySweepAtcInputTc(self):
+        '''Sweep ATC_INPUT_TC and record beacon-stability logs'''
+        self.context_push()
+        try:
+            self.BeaconStabilitySweep_generic(BEACON_STABILITY_SWEEP_PARAMS[4])
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
+    def BeaconStabilitySweepPscJerkNe(self):
+        '''Sweep PSC_JERK_NE and record beacon-stability logs'''
+        self.context_push()
+        try:
+            self.BeaconStabilitySweep_generic(BEACON_STABILITY_SWEEP_PARAMS[5])
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
+    def BeaconStabilitySweepPscNePosP(self):
+        '''Sweep PSC_NE_POS_P and record beacon-stability logs'''
+        self.context_push()
+        try:
+            self.BeaconStabilitySweep_generic(BEACON_STABILITY_SWEEP_PARAMS[6])
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
+    def tests_beacon_stability_sweep(self):
+        return [
+            self.BeaconStabilitySweepEK3BcnMNse,
+            self.BeaconStabilitySweepEK3AccPNse,
+            self.BeaconStabilitySweepPscNeVelFlt,
+            self.BeaconStabilitySweepAtcRatFlte,
+            self.BeaconStabilitySweepAtcInputTc,
+            self.BeaconStabilitySweepPscJerkNe,
+            self.BeaconStabilitySweepPscNePosP,
+        ]
+
     def AC_Avoidance_Beacon(self):
         '''Test beacon avoidance slide behaviour'''
         self.context_push()
@@ -18464,3 +18690,14 @@ class AutoTestBattCAN(AutoTestCopter):
 
     def tests(self):
         return self.testcanbatt()
+
+
+class AutoTestCopterBeaconStabilitySweep(AutoTestCopter):
+    '''Isolated test class for the beacon-stability parameter sweep, kept out
+    of AutoTestCopter.tests() (and therefore out of the CopterTests1a-2b CI
+    groups) since a full sweep is many flights and not CI-runtime-friendly.
+    Invoke with test.CopterBeaconSweep (all groups) or
+    test.CopterBeaconSweep.<TestName> (one group).'''
+
+    def tests(self):
+        return self.tests_beacon_stability_sweep()
