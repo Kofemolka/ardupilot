@@ -10453,8 +10453,9 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         '''takeoff to 50m and fly 1km north in GUIDED, for beacon-stability
         parameter sweeps; log capture is the caller's job'''
         self.takeoff(50, mode='GUIDED')
-        target = self.offset_location_heading_distance(self.mav.location(), 0, 1000)
-        self.fly_guided_move_to(target, timeout=180)
+        self.fly_guided_move_local(500, 0, 50, timeout=180)
+        self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=3)
+        self.fly_guided_move_local(2500, 0, 50, timeout=300)
         self.land_and_disarm()
 
     def BeaconStabilitySweep_generic(self, sweep_param):
@@ -10475,6 +10476,9 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         home = self.home_position_as_mav_location()
         beacons = self.beacon_stability_corners(home)
 
+        SRC_GPS = 1
+        SRC_BCN = 3
+
         self.set_parameters({
             "EK3_ENABLE": 1,
             "EK2_ENABLE": 0,
@@ -10482,15 +10486,27 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             "EK3_IMU_MASK": 1,
             "BCN_TYPE": 4,
 
-            # SRC1: BCN
-            "EK3_SRC1_POSXY": 4,
+            # SRC1: GPS
+            "EK3_SRC1_POSXY": 3,
             "EK3_SRC1_POSZ": 1,
-            "EK3_SRC1_VELXY": 0,
-            "EK3_SRC1_VELZ": 0,
+            "EK3_SRC1_VELXY": 3,
+            "EK3_SRC1_VELZ": 3,
             "EK3_SRC1_YAW": 1,
+
+            # SRC3: BCN
+            "EK3_SRC3_POSXY": 4,
+            "EK3_SRC3_POSZ": 1,
+            "EK3_SRC3_VELXY": 0,
+            "EK3_SRC3_VELZ": 0,
+            "EK3_SRC3_YAW": 1,
 
             "GPS1_TYPE": 1,
             "SIM_WIND_SPD": 0,
+
+            "EK3_BCN_M_NSE": 50.0,
+            "EK3_BCN_I_GTE": 500,
+            "EK3_BCN_MAX_HDOP": 5.0,
+            "EK3_BCN_FUS_FAIL": 3,
         })
 
         out_dir = os.path.join("logs", "beacon_stability", log_subdir)
@@ -10502,11 +10518,12 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             self.reboot_sitl()
 
             random.seed(0xBEAC0 + i)
-            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=0.5, rate_hz=10.0)
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=50, rate_hz=2)
             self.install_message_hook(beacon_sim)
 
             status = "completed"
             try:
+                self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_GPS)
                 self.wait_ready_to_arm()
                 self.delay_sim_time(15, reason="beacon/EKF warmup")
                 self.fly_beacon_stability_leg()

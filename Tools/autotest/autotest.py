@@ -1143,6 +1143,7 @@ if __name__ == "__main__":
 
         'test.CopterTests2a',
         'test.CopterTests2b',
+        'test.CopterBeaconSweep',
 
         'test.PlaneTests1a',
         'test.PlaneTests1b',

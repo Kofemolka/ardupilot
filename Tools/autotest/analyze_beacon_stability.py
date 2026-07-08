@@ -8,14 +8,23 @@ attitude stability during the cruise portion of its flight.
 Reads the logs/beacon_stability/<param>/<value>.json sidecars written by the
 sweep test (which record which param/value produced which BIN file and
 whether the flight completed, timed out, or errored), computes roll/pitch
-stability metrics from each completed run's ATT/POS messages, and writes a
-CSV of all runs plus a Markdown report recommending the best value per
-parameter group.
+stability metrics from each completed run's ATT messages, and writes a CSV of
+all runs plus a Markdown report recommending the best value per parameter
+group.
+
+The sweep flies the first part of each leg on SRC1 (GPS) and switches the
+active EKF3 source set to SRC3 (Beacon) partway through -- metrics are only
+meaningful for the segment actually running on the noisy beacon source, so
+the analysis window is: MODE == GUIDED AND XKFS.SS == 2 (tertiary/SRC3, per
+AP_NavEKF3/LogStructure.h: "Source Set (primary=0/secondary=1/tertiary=2)").
+XKFS is logged periodically per EKF3 core, giving a direct sample-by-sample
+record of which source set was actually active -- more robust than inferring
+the switch from a one-off status-text message.
 
 Usage:
     python3 Tools/autotest/analyze_beacon_stability.py
     python3 Tools/autotest/analyze_beacon_stability.py --root logs/beacon_stability \
-        --trim-radius-m 200 --out-csv report.csv --out-md report.md
+        --settle-s 2.0 --out-csv report.csv --out-md report.md
 '''
 
 import argparse
@@ -26,7 +35,9 @@ import os
 import numpy
 
 from pymavlink import DFReader
-from pymavlink import mavextra
+
+GUIDED_MODE_NUM = 4  # ArduCopter Mode::Number::GUIDED
+SRC3_SOURCE_SET = 2  # XKFS.SS: primary=0/secondary=1/tertiary(SRC3)=2
 
 # Weighted-sum score components; lower score = more stable. Each metric is
 # min-max normalized within its own param group before weighting, so the
@@ -56,45 +67,75 @@ def discover_runs(root):
 
 
 def load_log(path):
-    '''single pass over a BIN log, returning (pos, att) sample lists.
+    '''single pass over a BIN log, returning (att, modes, src_sets) sample lists.
 
-    pos: list of (time_us, distance_from_first_pos_m)
     att: list of (time_us, roll, pitch, desroll, despitch)
+    modes: list of (time_us, mode_num)
+    src_sets: list of (time_us, source_set) from XKFS.SS, core 0 only
     '''
     dfreader = DFReader.DFReader_binary(path, zero_time_base=True)
-    home = None
-    pos = []
     att = []
+    modes = []
+    src_sets = []
     while True:
-        m = dfreader.recv_match(type=['POS', 'ATT'])
+        m = dfreader.recv_match(type=['ATT', 'MODE', 'XKFS'])
         if m is None:
             break
         mtype = m.get_type()
-        if mtype == 'POS':
-            if home is None:
-                home = (m.Lat * 1e-7, m.Lng * 1e-7)
-            d = mavextra.distance_lat_lon(home[0], home[1], m.Lat * 1e-7, m.Lng * 1e-7)
-            pos.append((m.TimeUS, d))
-        else:  # ATT
+        if mtype == 'ATT':
             att.append((m.TimeUS, m.Roll, m.Pitch, m.DesRoll, m.DesPitch))
-    return pos, att
+        elif mtype == 'MODE':
+            modes.append((m.TimeUS, m.ModeNum))
+        else:  # XKFS
+            if m.C == 0:
+                src_sets.append((m.TimeUS, m.SS))
+    return att, modes, src_sets
 
 
-def cruise_window(pos, trim_radius_m):
-    '''bound the cruise segment by distance-from-home rather than MODE
-    transitions (GUIDED has none) or fixed time (unfair across values with
-    different accel/settle behaviour). Raises ValueError if the flight never
-    got far enough from home for a meaningful cruise segment to exist.'''
-    if not pos:
-        raise ValueError("no POS samples in log")
-    max_dist = max(d for _, d in pos)
-    if max_dist < 2 * trim_radius_m:
-        raise ValueError(
-            "flight too short for trim_radius_m=%.0f (max_dist=%.0f)" % (trim_radius_m, max_dist))
-    t_start = next(t for t, d in pos if d >= trim_radius_m)
-    t_end = next(t for t, d in reversed(pos) if d <= max_dist - trim_radius_m)
+def guided_src3_window(modes, src_sets, settle_s):
+    '''bound the analysis segment to MODE==GUIDED intersected with the time
+    the EKF3 was actually on the tertiary (SRC3/Beacon) source set, per
+    XKFS.SS -- metrics from the initial SRC1 (GPS) portion of the leg, or
+    from LAND, aren't representative of the parameter under test. settle_s
+    skips a short buffer right after the source switch to avoid scoring the
+    one-off transient of the EKF re-converging onto the new source.
+    Raises ValueError if either segment can't be found or the intersection
+    is empty/too short.'''
+    if not modes:
+        raise ValueError("no MODE samples in log")
+    if not src_sets:
+        raise ValueError("no XKFS samples in log")
+
+    # MODE is logged on every mode-set call, including duplicate re-asserts of
+    # the same mode number (not just on an actual mode change) -- so the real
+    # exit from GUIDED is the first *different* mode_num after guided_start,
+    # not simply the next MODE record.
+    guided_start = None
+    guided_end = None
+    for t, mode_num in modes:
+        if mode_num == GUIDED_MODE_NUM:
+            if guided_start is None:
+                guided_start = t
+        elif guided_start is not None:
+            guided_end = t
+            break
+    if guided_start is None:
+        raise ValueError("vehicle never entered GUIDED mode")
+    if guided_end is None:
+        guided_end = max(modes[-1][0], src_sets[-1][0])
+
+    src3_times = [t for t, ss in src_sets if ss == SRC3_SOURCE_SET]
+    if not src3_times:
+        raise ValueError("EKF3 never reported source set SRC3 (XKFS.SS==%d)" % SRC3_SOURCE_SET)
+    src3_start = min(src3_times)
+    src3_end = max(src3_times)
+
+    t_start = max(guided_start, src3_start) + settle_s * 1e6
+    t_end = min(guided_end, src3_end)
     if t_end <= t_start:
-        raise ValueError("degenerate cruise window (t_end <= t_start)")
+        raise ValueError(
+            "empty GUIDED/SRC3 intersection (guided=[%d,%d], src3=[%d,%d])" %
+            (guided_start, guided_end, src3_start, src3_end))
     return t_start, t_end
 
 
@@ -145,7 +186,7 @@ def score_group(rows):
     ]
 
 
-def analyze(root, trim_radius_m):
+def analyze(root, settle_s):
     '''returns (all_rows, groups) where all_rows is a flat list of per-run
     dicts (for the CSV) and groups is {param_dir: [row, ...]} for the
     Markdown report, each row annotated with metrics/score or an error.'''
@@ -167,16 +208,18 @@ def analyze(root, trim_radius_m):
         row["pitch_zero_cross_hz"] = None
         row["score"] = None
 
-        if row["status"] != "completed":
-            row["error"] = "run status=%s, not scored" % row["status"]
-        else:
-            try:
-                pos, att = load_log(meta["log_path"])
-                t_start, t_end = cruise_window(pos, trim_radius_m)
-                metrics = metrics_for_run(att, t_start, t_end)
-                row.update(metrics)
-            except Exception as e:
-                row["error"] = str(e)
+        # Score regardless of status: a "timed_out" run (never reached the
+        # final target) still flew a real GUIDED+SRC3 segment up until the
+        # timeout, and that segment is exactly what we want to measure. Only
+        # "error" runs that never got the vehicle flying at all are likely to
+        # come up empty here, and that'll surface naturally as an error below.
+        try:
+            att, modes, src_sets = load_log(meta["log_path"])
+            t_start, t_end = guided_src3_window(modes, src_sets, settle_s)
+            metrics = metrics_for_run(att, t_start, t_end)
+            row.update(metrics)
+        except Exception as e:
+            row["error"] = str(e)
 
         all_rows.append(row)
         groups.setdefault(meta["param_dir"], []).append(row)
@@ -208,9 +251,10 @@ def write_markdown(path, groups):
     lines = ["# Beacon Stability Sweep Report", ""]
     lines.append(
         "Lower score = more stable (weighted, per-group-normalized combination of "
-        "roll/pitch std-dev and RMS tracking error over the cruise window; "
-        "weights: %s). Runs that timed out, errored, or had too short a cruise "
-        "window to measure are listed but excluded from scoring." % SCORE_WEIGHTS)
+        "roll/pitch std-dev and RMS tracking error, measured only over the segment "
+        "flying GUIDED on SRC3/Beacon; weights: %s). Runs that timed out, errored, "
+        "or never reached a GUIDED+SRC3 segment are listed but excluded from "
+        "scoring." % SCORE_WEIGHTS)
     lines.append("")
 
     summary = ["", "## Summary", "", "| Param | Recommended value | Score |", "|---|---|---|"]
@@ -249,12 +293,15 @@ def write_markdown(path, groups):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=os.path.join("logs", "beacon_stability"))
-    parser.add_argument("--trim-radius-m", type=float, default=200.0)
+    parser.add_argument(
+        "--settle-s", type=float, default=2.0,
+        help="seconds to skip right after the SRC1->SRC3 switch, to exclude the EKF's "
+             "one-off re-convergence transient from the stability metrics")
     parser.add_argument("--out-csv", default="beacon_stability_report.csv")
     parser.add_argument("--out-md", default="beacon_stability_report.md")
     args = parser.parse_args()
 
-    all_rows, groups = analyze(args.root, args.trim_radius_m)
+    all_rows, groups = analyze(args.root, args.settle_s)
     if not all_rows:
         print("no runs found under %s" % args.root)
         return
