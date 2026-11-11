@@ -4388,6 +4388,66 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.disarm_vehicle(force=True)
             self.context_pop()
 
+    def BeaconFarFieldReceiverAltitude(self):
+        '''Beacons 40km away in a 10km square, vehicle flies 10-20km further away.
+        Collects logs of receiver (XKRP) and beacon (XKRB) altitude behaviour at
+        very long, nearly coplanar ranges.  No assertions yet.'''
+
+        BCN_CENTRE_DIST = 40000     # m, north of SITL start
+        BCN_HALF_SIDE = 5000        # m, square has a 10km side
+        FLY_AWAY_DIST = 15000       # m, beyond the start, away from the beacons
+
+        home = SITL_START_LOCATION
+        centre = self.offset_location_ne(home, BCN_CENTRE_DIST, 0)
+        beacons = []
+        for north, east in ((1, -1), (1, 1), (-1, -1), (-1, 1)):
+            loc = self.offset_location_ne(centre, north * BCN_HALF_SIDE, east * BCN_HALF_SIDE)
+            beacons.append((loc.lat, loc.lng, home.alt))
+
+        self.context_push()
+        try:
+            self.set_parameters({
+                "EK3_ENABLE": 1,
+                "EK2_ENABLE": 0,
+                "AHRS_EKF_TYPE": 3,
+                "EK3_IMU_MASK": 1,
+                "BCN_TYPE": 4,
+                "BCN_LATITUDE": home.lat,
+                "BCN_LONGITUDE": home.lng,
+                "BCN_ALT": home.alt,
+
+                # SRC1: GPS, so beacons run in the static (alignment) filter
+                "EK3_SRC1_POSXY": 3,
+                "EK3_SRC1_POSZ": 1,
+                "EK3_SRC1_VELXY": 3,
+                "EK3_SRC1_VELZ": 3,
+                "EK3_SRC1_YAW": 1,
+
+                "EK3_BCN_M_NSE": 5,
+                "EK3_BCN_I_GTE": 500,
+
+                "GPS1_TYPE": 1,
+            })
+            self.reboot_sitl()
+
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=1.0, rate_hz=2)
+            self.install_message_hook_context(beacon_sim)
+
+            self.wait_ready_to_arm()
+            self.delay_sim_time(15, reason="warmup")
+
+            self.start_flying_simple_relhome_mission([
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 100),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, -FLY_AWAY_DIST, 0, 100),
+                (mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM, 0, 0, 100),
+            ])
+
+            self.wait_distance_to_home(FLY_AWAY_DIST - 500, FLY_AWAY_DIST + 2000, timeout=1500)
+            self.delay_sim_time(60, reason="Loiter at the far point to collect logs")
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
     def FenceAltCeilFloor(self):
         '''Tests the fence ceiling and floor'''
         self.set_parameters({
@@ -8792,6 +8852,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.EKFBeaconPositionOffsetFusion,
             self.BeaconFusionRecovery,
             self.BeaconWindEstimation,
+            self.BeaconFarFieldReceiverAltitude,
             self.AirspeedDrivers,
             self.RTL_CLIMB_MIN,
             self.ClimbBeforeTurn,
