@@ -4471,29 +4471,69 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.context_pop()
 
     def BeaconClimbThroughBeaconPlane(self):
-        '''Reproduces a real flight where the estimated receiver altitude went down while
-        the vehicle was climbing.  Four stationary beacons, 50-100m above home, are
-        18-45km away (horizontal positions taken from the log).
-        The EKF stays on GPS, so the beacons only run in the static (3-state) filter,
-        as in the log.  The vehicle climbs to 1040m over home, then flies east climbing
-        to 1340m.  No assertions yet.'''
+        '''Reproduces a real flight where the static beacon receiver altitude drifted while
+        climbing on GPS, and range fusion later failed on beacons.  The 12 beacon
+        positions (relative to home) and the track are taken from the log: out 104km
+        east climbing to 1770m, then back home descending.  The beacons share 4 slots
+        and are reassigned randomly every 10s, as the real beacon system reuses slots.
+        The EKF source is switched between GPS and beacons at the same eastward
+        distances as in the log, and range fusion failures are expected on the final
+        beacon leg.'''
 
-        START_ALT = 1040            # m above home, where the log segment starts
-        END_ALT = 1340              # m above home at the end of the leg
-        LEG_DIST = 11000            # m flown east on beacons
+        SRC_GPS = 1
+        SRC_BCN = 2
 
-        # per-beacon range errors estimated from the log residuals
-        RANGE_BIAS = (3, 60, 150, 64)   # m
+        # (north, east, height above home) of the physical beacons, from the log
+        beacon_offsets = (
+            (-6, -2, 11),
+            (-12, -3, 5),
+            (1753, -172, 27),
+            (1417, 2897, 19),
+            (2344, -10578, 40),
+            (-10862, -7318, 34),
+            (-22215, 17780, 48),
+            (44977, -9022, -27),
+            (-797, 52554, 183),
+            (-24032, 60616, 104),
+            (12430, 90920, 146),
+            (-19172, 99116, 120),
+        )
+
+        # (north, east, altitude above home) of the track, from the log
+        track = (
+            (0, 6000, 480),
+            (-1300, 15000, 720),
+            (-3300, 26000, 885),
+            (-5300, 39000, 1180),
+            (-7300, 52500, 1456),
+            (-6800, 66000, 1680),
+            (-7000, 76000, 1767),
+            (-7150, 104000, 1767),
+            (-6900, 84000, 1761),
+            (-6650, 70000, 1746),
+            (-6100, 60300, 1655),
+            (-7000, 50600, 1496),
+            (-5200, 40200, 1287),
+            (-3600, 29300, 836),
+            (-1900, 18700, 495),
+            (475, 7200, 332),
+        )
+        FINAL_ALT = 100
+
+        # (source, east distance at which it was selected, outbound) from the log
+        switches = (
+            ("BCN", SRC_BCN, 52500, True),
+            ("GPS", SRC_GPS, 55000, True),
+            ("BCN", SRC_BCN, 76000, True),
+            ("turn", None, 103000, True),
+            ("GPS", SRC_GPS, 78500, False),
+            ("BCN", SRC_BCN, 73000, False),
+            ("GPS", SRC_GPS, 70800, False),
+            ("BCN final", SRC_BCN, 63500, False),
+            ("GPS final", SRC_GPS, 2500, False),
+        )
 
         home = SITL_START_LOCATION
-        # (north, east, height above home) of the beacons relative to the vehicle
-        # position at the start of the log segment
-        beacon_offsets = (
-            (4586, -34277, 50),
-            (6936, -44853, 100),
-            (-17623, -16495, 60),
-            (3795, 18279, 90),
-        )
         beacons = []
         for north, east, height in beacon_offsets:
             loc = self.offset_location_ne(home, north, east)
@@ -4517,6 +4557,12 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 "EK3_SRC1_VELXY": 3,
                 "EK3_SRC1_VELZ": 3,
                 "EK3_SRC1_YAW": 1,
+                # SRC2: beacons XY, baro Z
+                "EK3_SRC2_POSXY": 4,
+                "EK3_SRC2_POSZ": 1,
+                "EK3_SRC2_VELXY": 0,
+                "EK3_SRC2_VELZ": 0,
+                "EK3_SRC2_YAW": 1,
 
                 # as in the real flight
                 "EK3_BCN_M_NSE": 50,
@@ -4530,26 +4576,142 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.reboot_sitl()
 
             beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=20.0, rate_hz=2,
-                                             range_bias_m=RANGE_BIAS)
+                                             num_slots=4, rotation_s=10)
             self.install_message_hook_context(beacon_sim)
 
             self.wait_ready_to_arm()
             self.delay_sim_time(15, reason="warmup")
 
-            self.start_flying_simple_relhome_mission([
-                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 100),
-                (mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT, 0, 0, START_ALT),
-                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, LEG_DIST, END_ALT),
-                (mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM, 0, LEG_DIST, END_ALT),
-            ])
+            mission = [(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 100)]
+            mission.extend((mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, n, e, alt) for n, e, alt in track)
+            # a (0, 0) location means the current location, so stay just off home
+            mission.append((mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 10, 10, FINAL_ALT))
+            mission.append((mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM, 10, 10, FINAL_ALT))
+            self.start_flying_simple_relhome_mission(mission)
 
-            self.wait_current_waypoint(3, timeout=1500)
-            self.progress("Reached %um" % START_ALT)
+            metres_per_deg_lng = 111319.5 * math.cos(math.radians(home.lat))
 
-            self.wait_distance_to_home(LEG_DIST - 500, LEG_DIST + 2000, timeout=1500)
-            self.delay_sim_time(30, reason="Collect logs at the end of the leg")
+            def wait_east(east, outbound, timeout=6000):
+                tstart = self.get_sim_time()
+                while True:
+                    if self.get_sim_time_cached() - tstart > timeout:
+                        raise AutoTestTimeoutException("Did not reach %um east" % east)
+                    current = (self.sim_location().lng - home.lng) * metres_per_deg_lng
+                    if (current >= east) if outbound else (current <= east):
+                        return
+                    self.wait_heartbeat()
+
+            phases = []
+            for name, src, east, outbound in switches:
+                wait_east(east, outbound)
+                if src is None:
+                    self.progress("Reached %s at %.1fkm east" % (name, east * 0.001))
+                    continue
+                self.progress("Switching to %s at %.1fkm east" % (name, east * 0.001))
+                phases.append((name, self.get_sim_time() * 1e6))
+                self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=src)
+            self.delay_sim_time(30, reason="Back on GPS near home")
+            phases.append(("end", self.get_sim_time() * 1e6))
+
+            # XKRB fusion results per phase
+            dfreader = self.dfreader_for_current_onboard_log()
+            stats = {}
+            while True:
+                m = dfreader.recv_match(type='XKRB')
+                if m is None:
+                    break
+                for index, ((name, start), (_, end)) in enumerate(zip(phases, phases[1:])):
+                    if start <= m.TimeUS < end:
+                        total, failed, max_innov = stats.get(index, (0, 0, 0))
+                        stats[index] = (total + 1, failed + (m.OK == 0), max(max_innov, abs(m.Innov)))
+            for index, (total, failed, max_innov) in sorted(stats.items()):
+                self.progress("%s: %u of %u failed, max |innov| %.0fm" %
+                              (phases[index][0], failed, total, max_innov))
+
+            final = [v for index, v in stats.items() if phases[index][0] == "BCN final"]
+            if not final or final[0][1] == 0:
+                raise NotAchievedException("Expected range beacon fusion failures on the final beacon leg")
         finally:
             self.disarm_vehicle(force=True)
+            self.context_pop()
+
+    def BeaconStaticDownOffset(self):
+        '''Static beacon filter must apply the beacon vertical offset once.
+        The vehicle sits on the ground on GPS, so only the static (3-state) filter
+        runs.  Beacons are 100m below home but report an altitude ALT_OFFSET higher,
+        while ranges use the true geometry.  The beacon frame is therefore ALT_OFFSET
+        above the EKF frame, and the static receiver down position must converge to
+        the EKF down position minus ALT_OFFSET.'''
+
+        ALT_OFFSET = 50             # m, reported beacon altitude minus true altitude
+        BCN_DEPTH = 100             # m, true beacon height below home
+        BCN_HALF_SIDE = 1000        # m, beacons on a 2km square around home
+        TOLERANCE = 10              # m
+
+        home = SITL_START_LOCATION
+        beacons = []
+        for north, east in ((1, -1), (1, 1), (-1, -1), (-1, 1)):
+            loc = self.offset_location_ne(home, north * BCN_HALF_SIDE, east * BCN_HALF_SIDE)
+            beacons.append((loc.lat, loc.lng, home.alt - BCN_DEPTH))
+
+        self.context_push()
+        try:
+            self.set_parameters({
+                "EK3_ENABLE": 1,
+                "EK2_ENABLE": 0,
+                "AHRS_EKF_TYPE": 3,
+                "EK3_IMU_MASK": 1,
+                "BCN_TYPE": 4,
+                "LOG_DISARMED": 1,
+
+                # SRC1: GPS, so beacons run in the static filter only
+                "EK3_SRC1_POSXY": 3,
+                "EK3_SRC1_POSZ": 1,
+                "EK3_SRC1_VELXY": 3,
+                "EK3_SRC1_VELZ": 3,
+                "EK3_SRC1_YAW": 1,
+
+                "EK3_BCN_M_NSE": 1,
+                "EK3_BCN_I_GTE": 500,
+
+                "GPS1_TYPE": 1,
+            })
+            self.reboot_sitl()
+
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=0, rate_hz=2,
+                                             alt_offset_m=ALT_OFFSET)
+            self.install_message_hook_context(beacon_sim)
+
+            self.wait_ready_to_arm()
+            self.delay_sim_time(90, reason="static filter convergence")
+
+            dfreader = self.dfreader_for_current_onboard_log()
+            ekf_pd = None
+            errors = []
+            while True:
+                m = dfreader.recv_match(type=['XKF1', 'XKRP'])
+                if m is None:
+                    break
+                if m.get_type() == 'XKF1':
+                    if m.C == 0:
+                        ekf_pd = m.PD
+                    continue
+                if ekf_pd is None or m.Mode != 0:
+                    continue
+                # beacon frame is ALT_OFFSET above the EKF frame
+                errors.append(m.PD - (ekf_pd - ALT_OFFSET))
+
+            tail = errors[-20:]
+            if not tail:
+                raise NotAchievedException("No static XKRP messages found")
+            mean_error = sum(tail) / len(tail)
+            self.progress("Receiver down error vs expected: %.1fm (offset applied twice would give %.1fm)" %
+                          (mean_error, 2 * ALT_OFFSET))
+            if abs(mean_error) > TOLERANCE:
+                raise NotAchievedException(
+                    "Static receiver down position is %.1fm off, expected within %um" %
+                    (mean_error, TOLERANCE))
+        finally:
             self.context_pop()
 
     def FenceAltCeilFloor(self):
@@ -8958,6 +9120,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.BeaconWindEstimation,
             self.BeaconFarFieldReceiverAltitude,
             self.BeaconClimbThroughBeaconPlane,
+            self.BeaconStaticDownOffset,
             self.AirspeedDrivers,
             self.RTL_CLIMB_MIN,
             self.ClimbBeforeTurn,
