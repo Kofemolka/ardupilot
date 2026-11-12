@@ -4390,12 +4390,19 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
     def BeaconFarFieldReceiverAltitude(self):
         '''Beacons 40km away in a 10km square, vehicle flies 10-20km further away.
-        Collects logs of receiver (XKRP) and beacon (XKRB) altitude behaviour at
-        very long, nearly coplanar ranges.  No assertions yet.'''
+        Climbs to 2000m, flies 2km more on GPS, then switches to beacon source to
+        reproduce a wrong receiver-altitude hypothesis (Z offset on all beacons).
+        Collects logs of receiver (XKRP) and beacon (XKRB) altitude behaviour.
+        No assertions yet.'''
+
+        SRC_GPS = 1
+        SRC_BCN = 2
+        CRUISE_ALT = 2000           # m above home
+        EXTRA_DIST = 2000           # m to fly after reaching CRUISE_ALT before switching
 
         BCN_CENTRE_DIST = 40000     # m, north of SITL start
         BCN_HALF_SIDE = 5000        # m, square has a 10km side
-        FLY_AWAY_DIST = 15000       # m, beyond the start, away from the beacons
+        FLY_AWAY_DIST = 20000       # m, beyond the start, away from the beacons
 
         home = SITL_START_LOCATION
         centre = self.offset_location_ne(home, BCN_CENTRE_DIST, 0)
@@ -4422,6 +4429,12 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 "EK3_SRC1_VELXY": 3,
                 "EK3_SRC1_VELZ": 3,
                 "EK3_SRC1_YAW": 1,
+                # SRC2: beacons XY, baro Z
+                "EK3_SRC2_POSXY": 4,
+                "EK3_SRC2_POSZ": 1,
+                "EK3_SRC2_VELXY": 0,
+                "EK3_SRC2_VELZ": 0,
+                "EK3_SRC2_YAW": 1,
 
                 "EK3_BCN_M_NSE": 5,
                 "EK3_BCN_I_GTE": 500,
@@ -4430,7 +4443,94 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             })
             self.reboot_sitl()
 
-            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=1.0, rate_hz=2)
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=50.0, rate_hz=2)
+            self.install_message_hook_context(beacon_sim)
+
+            self.wait_ready_to_arm()
+            self.delay_sim_time(15, reason="warmup")
+
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_GPS)
+
+            self.start_flying_simple_relhome_mission([
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 100),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, -FLY_AWAY_DIST/2, 0, 2000),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, -FLY_AWAY_DIST, 0, CRUISE_ALT),
+                (mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM, 0, 0, CRUISE_ALT),
+            ])
+
+            self.wait_altitude(CRUISE_ALT - 10, CRUISE_ALT + 100, relative=True, timeout=1500)
+            dist = self.distance_to_home()
+            self.progress("Reached %um at %um from home" % (CRUISE_ALT, dist))
+            self.wait_distance_to_home(dist + EXTRA_DIST, FLY_AWAY_DIST + 2000, timeout=1500)
+
+            self.progress("Switching to BCN")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_BCN)
+            self.delay_sim_time(60, reason="Fly on beacons to collect logs")
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
+    def BeaconClimbThroughBeaconPlane(self):
+        '''Reproduces a real flight where the estimated receiver altitude went down while
+        the vehicle was climbing.  Four stationary beacons, 50-100m above home, are
+        18-45km away (horizontal positions taken from the log).
+        The EKF stays on GPS, so the beacons only run in the static (3-state) filter,
+        as in the log.  The vehicle climbs to 1040m over home, then flies east climbing
+        to 1340m.  No assertions yet.'''
+
+        START_ALT = 1040            # m above home, where the log segment starts
+        END_ALT = 1340              # m above home at the end of the leg
+        LEG_DIST = 11000            # m flown east on beacons
+
+        # per-beacon range errors estimated from the log residuals
+        RANGE_BIAS = (3, 60, 150, 64)   # m
+
+        home = SITL_START_LOCATION
+        # (north, east, height above home) of the beacons relative to the vehicle
+        # position at the start of the log segment
+        beacon_offsets = (
+            (4586, -34277, 50),
+            (6936, -44853, 100),
+            (-17623, -16495, 60),
+            (3795, 18279, 90),
+        )
+        beacons = []
+        for north, east, height in beacon_offsets:
+            loc = self.offset_location_ne(home, north, east)
+            beacons.append((loc.lat, loc.lng, home.alt + height))
+
+        self.context_push()
+        try:
+            self.set_parameters({
+                "EK3_ENABLE": 1,
+                "EK2_ENABLE": 0,
+                "AHRS_EKF_TYPE": 3,
+                "EK3_IMU_MASK": 1,
+                "BCN_TYPE": 4,
+                "BCN_LATITUDE": home.lat,
+                "BCN_LONGITUDE": home.lng,
+                "BCN_ALT": home.alt,
+
+                # SRC1: GPS
+                "EK3_SRC1_POSXY": 3,
+                "EK3_SRC1_POSZ": 1,
+                "EK3_SRC1_VELXY": 3,
+                "EK3_SRC1_VELZ": 3,
+                "EK3_SRC1_YAW": 1,
+
+                # as in the real flight
+                "EK3_BCN_M_NSE": 50,
+                "EK3_BCN_I_GTE": 500,
+                "EK3_BCN_MAX_HDOP": 5.0,
+                "EK3_BCN_REC_PASS": 3,
+                "EK3_BCN_FUS_FAIL": 10,
+
+                "GPS1_TYPE": 1,
+            })
+            self.reboot_sitl()
+
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=20.0, rate_hz=2,
+                                             range_bias_m=RANGE_BIAS)
             self.install_message_hook_context(beacon_sim)
 
             self.wait_ready_to_arm()
@@ -4438,12 +4538,16 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
             self.start_flying_simple_relhome_mission([
                 (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 100),
-                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, -FLY_AWAY_DIST, 0, 100),
-                (mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM, 0, 0, 100),
+                (mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT, 0, 0, START_ALT),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, LEG_DIST, END_ALT),
+                (mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM, 0, LEG_DIST, END_ALT),
             ])
 
-            self.wait_distance_to_home(FLY_AWAY_DIST - 500, FLY_AWAY_DIST + 2000, timeout=1500)
-            self.delay_sim_time(60, reason="Loiter at the far point to collect logs")
+            self.wait_current_waypoint(3, timeout=1500)
+            self.progress("Reached %um" % START_ALT)
+
+            self.wait_distance_to_home(LEG_DIST - 500, LEG_DIST + 2000, timeout=1500)
+            self.delay_sim_time(30, reason="Collect logs at the end of the leg")
         finally:
             self.disarm_vehicle(force=True)
             self.context_pop()
@@ -8853,6 +8957,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.BeaconFusionRecovery,
             self.BeaconWindEstimation,
             self.BeaconFarFieldReceiverAltitude,
+            self.BeaconClimbThroughBeaconPlane,
             self.AirspeedDrivers,
             self.RTL_CLIMB_MIN,
             self.ClimbBeforeTurn,

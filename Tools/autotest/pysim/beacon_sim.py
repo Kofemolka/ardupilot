@@ -103,18 +103,21 @@ class SITLBeaconSimulator:
                    and mav.write())
     beacons:       list of up to 4 (lat_deg, lon_deg, alt_m_MSL) tuples
     noise_sigma_m: 1-sigma Gaussian range noise added to each measurement (metres)
+    range_bias_m:  optional list with a constant range error (metres) per beacon,
+                   e.g. to model multipath or beacon position errors
     rate_hz:       full cycle rate in simulation Hz — total messages per second is
                    rate_hz * len(beacons), evenly spaced in round-robin order.
                    Example: 4 beacons at 2 Hz → 8 messages/s, one every 125 ms.
     '''
 
-    def __init__(self, suite, beacons, noise_sigma_m=0.5, rate_hz=10.0):
+    def __init__(self, suite, beacons, noise_sigma_m=0.5, rate_hz=10.0, range_bias_m=None):
         if len(beacons) > 4:
             raise ValueError("AP_Beacon supports at most 4 beacons (AP_BEACON_MAX_BEACONS=4)")
         self._suite = suite
         self._beacons = list(beacons)
         self._noise_sigma_m = noise_sigma_m
         self._rate_hz = rate_hz
+        self._range_bias_m = list(range_bias_m) if range_bias_m is not None else [0.0] * len(self._beacons)
         self._seq = 0
         self._next_beacon = 0          # round-robin index
         self._next_send_time = None    # sim-time of next scheduled send (set on first call)
@@ -152,7 +155,7 @@ class SITLBeaconSimulator:
         bcn_loc = mavutil.location(blat, blon, balt, 0)
         h = self._suite.get_distance(veh_loc, bcn_loc)   # horizontal (m)
         v = veh_alt - balt                                 # vertical (m)
-        range_m = math.sqrt(h * h + v * v)
+        range_m = math.sqrt(h * h + v * v) + self._range_bias_m[i]
         if self._noise_sigma_m > 0:
             range_m += random.gauss(0, self._noise_sigma_m)
         range_m = max(0.1, range_m)
