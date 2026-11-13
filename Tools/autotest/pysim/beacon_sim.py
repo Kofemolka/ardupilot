@@ -140,6 +140,13 @@ class SITLBeaconSimulator:
         self._next_beacon = 0          # round-robin index
         self._next_send_time = None    # sim-time of next scheduled send (set on first call)
 
+    def set_beacon(self, index, beacon, range_bias_m=None):
+        '''Move physical beacon index to beacon (lat_deg, lon_deg, alt_m_MSL),
+        optionally changing its constant range error.'''
+        self._beacons[index] = beacon
+        if range_bias_m is not None:
+            self._range_bias_m[index] = range_bias_m
+
     def __call__(self, mav, msg):
         '''Message hook entry point — called for every received MAVLink message.'''
         sim_now = self._suite.get_sim_time_cached()

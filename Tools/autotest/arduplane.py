@@ -4635,6 +4635,139 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.disarm_vehicle(force=True)
             self.context_pop()
 
+    def BeaconReceiverAltNearBeacon(self):
+        '''Beacons in the EKF frame must not get a vertical offset that rejects a nearby beacon.
+        Four distant beacons, the vehicle climbs on GPS and switches to beacons while
+        still climbing.  With BCN_ORG_TYPE Own the "beacons above"
+        vertical offset hypothesis is clamped to the vehicle height during the climb,
+        so range fusion places the beacons at the vehicle height, i.e. the receiver
+        altitude relative to the beacons is offset by the vehicle height from the EKF
+        altitude.  A beacon then appears on the ground close to the vehicle: its range
+        is mostly vertical, so every measurement from it fails the innovation check.
+        With BCN_ORG_TYPE EKF AP_Beacon_Sine reports beacon positions relative to the
+        EKF origin, no offset is applied and the nearby beacon must be fused.'''
+        SRC_BCN = 2
+        BCN_ORG_TYPE_EKF = 1
+
+        BCN_DIST = 40000            # m, distance of the four initial beacons
+        CLIMB_DIST = 8000           # m east, climbing to CRUISE_ALT
+        CRUISE_ALT = 1500           # m above home
+        SWITCH_ALT = 1000           # m above home, switch to beacons while climbing
+        NEAR_NORTH = 300            # m, nearby beacon north of the vehicle, on the ground
+        NEAR_TIME = 10              # s observed after the nearby beacon appears
+        MAX_REJECTED = 0.5          # fraction of nearby beacon updates allowed to fail
+        MAX_ALT_ERROR = 100         # m, receiver altitude error implied by the innovations
+
+        home = SITL_START_LOCATION
+        beacons = []
+        for north, east, height in ((BCN_DIST, -BCN_DIST / 2, 50),
+                                    (BCN_DIST / 2, -BCN_DIST, 100),
+                                    (-BCN_DIST, -BCN_DIST / 2, 60),
+                                    (-BCN_DIST / 2, -BCN_DIST, 90)):
+            loc = self.offset_location_ne(home, north, east)
+            beacons.append((loc.lat, loc.lng, home.alt + height))
+
+        self.context_push()
+        try:
+            self.set_parameters({
+                "EK3_ENABLE": 1,
+                "EK2_ENABLE": 0,
+                "AHRS_EKF_TYPE": 3,
+                "EK3_IMU_MASK": 1,
+                "BCN_TYPE": 4,
+                "BCN_ORG_TYPE": BCN_ORG_TYPE_EKF,
+
+                # SRC1: GPS
+                "EK3_SRC1_POSXY": 3,
+                "EK3_SRC1_POSZ": 1,
+                "EK3_SRC1_VELXY": 3,
+                "EK3_SRC1_VELZ": 3,
+                "EK3_SRC1_YAW": 1,
+                # SRC2: beacons XY, baro Z
+                "EK3_SRC2_POSXY": 4,
+                "EK3_SRC2_POSZ": 1,
+                "EK3_SRC2_VELXY": 0,
+                "EK3_SRC2_VELZ": 0,
+                "EK3_SRC2_YAW": 1,
+
+                "EK3_BCN_M_NSE": 50,
+                "EK3_BCN_I_GTE": 500,
+                "EK3_BCN_FUS_FAIL": 10,
+
+                # climb fast to keep the test short
+                "TECS_CLMB_MAX": 15,
+                "PTCH_LIM_MAX_DEG": 45,
+                "TECS_PITCH_MAX": 45,
+
+                "GPS1_TYPE": 1,
+            })
+            self.reboot_sitl()
+
+            beacon_sim = SITLBeaconSimulator(self, beacons=beacons, noise_sigma_m=20.0, rate_hz=2,
+                                             num_slots=4, seed=1)
+            self.install_message_hook_context(beacon_sim)
+
+            self.wait_ready_to_arm()
+
+            self.start_flying_simple_relhome_mission([
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 100),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, CLIMB_DIST, CRUISE_ALT),
+                (mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM, 0, CLIMB_DIST, CRUISE_ALT),
+            ])
+            self.wait_altitude(SWITCH_ALT, CRUISE_ALT + 100, relative=True, timeout=600)
+
+            self.progress("Switching to BCN while climbing")
+            self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_BCN)
+            self.delay_sim_time(5, reason="range fusion with distant beacons")
+
+            near_loc = self.offset_location_ne(self.sim_location(), NEAR_NORTH, 0)
+            beacon_sim.set_beacon(3, (near_loc.lat, near_loc.lng, home.alt))
+            near_time_us = self.get_sim_time() * 1e6
+            self.progress("Moved beacon 3 to the ground next to the vehicle")
+            self.delay_sim_time(NEAR_TIME, reason="range fusion with a nearby beacon")
+
+            # XKF0 holds the per-beacon test ratio, XKRB the innovation as float.
+            # XKRB.OK is not used: it holds the health of the last fused beacon.
+            dfreader = self.dfreader_for_current_onboard_log()
+            ekf = None
+            ratios = []
+            alt_errors = []
+            while True:
+                m = dfreader.recv_match(type=['XKF1', 'XKF0', 'XKRB'])
+                if m is None:
+                    break
+                if m.C != 0:
+                    continue
+                if m.get_type() == 'XKF1':
+                    ekf = m
+                    continue
+                if m.TimeUS < near_time_us + 1e6 or m.get_type() == 'XKF0' and m.ID != 3:
+                    continue
+                if m.get_type() == 'XKF0':
+                    ratios.append(m.TR)
+                elif m.BcnID == 3 and ekf is not None:
+                    # vertical separation implied by the predicted range, against the EKF one
+                    predicted = m.Innov + m.Rng
+                    horizontal_sq = (ekf.PN - m.BPN) ** 2 + (ekf.PE - m.BPE) ** 2
+                    used_height = math.sqrt(max(predicted ** 2 - horizontal_sq, 0))
+                    alt_errors.append(abs(m.BPD - ekf.PD) - used_height)
+
+            if not ratios or not alt_errors:
+                raise NotAchievedException("No nearby beacon fusion data")
+            rejected = sum(1 for ratio in ratios if ratio > 1)
+            alt_error = sorted(alt_errors)[len(alt_errors) // 2]
+            self.progress("Nearby beacon: %u of %u updates rejected, test ratio median %.1f" %
+                          (rejected, len(ratios), sorted(ratios)[len(ratios) // 2]))
+            self.progress("Receiver altitude above the nearby beacon used by range fusion is %.0fm off the EKF one" %
+                          alt_error)
+            if alt_error > MAX_ALT_ERROR or rejected > MAX_REJECTED * len(ratios):
+                raise NotAchievedException(
+                    "Nearby beacon rejected in %u of %u updates: range fusion uses a receiver altitude %.0fm off" %
+                    (rejected, len(ratios), alt_error))
+        finally:
+            self.disarm_vehicle(force=True)
+            self.context_pop()
+
     def BeaconStaticDownOffset(self):
         '''Static beacon filter must apply the beacon vertical offset once.
         The vehicle sits on the ground on GPS, so only the static (3-state) filter
@@ -9121,6 +9254,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.BeaconFarFieldReceiverAltitude,
             self.BeaconClimbThroughBeaconPlane,
             self.BeaconStaticDownOffset,
+            self.BeaconReceiverAltNearBeacon,
             self.AirspeedDrivers,
             self.RTL_CLIMB_MIN,
             self.ClimbBeforeTurn,
