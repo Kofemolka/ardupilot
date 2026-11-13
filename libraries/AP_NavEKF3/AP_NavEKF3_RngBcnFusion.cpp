@@ -43,12 +43,11 @@ void NavEKF3_core::BeaconFusion::InitialiseVariables()
     delete[] fusionReport;
     fusionReport = nullptr;
     numFusionReports = 0;
-    auto *beacon = dal.beacon();
-    if (beacon != nullptr) {
-        const uint8_t count = beacon->count();
-        fusionReport = NEW_NOTHROW BeaconFusion::FusionReport[count];
+    if (dal.beacon() != nullptr) {
+        // beacons may be discovered after initialisation, so allow for the maximum number
+        fusionReport = NEW_NOTHROW BeaconFusion::FusionReport[AP_BEACON_MAX_BEACONS];
         if (fusionReport != nullptr) {
-            numFusionReports = count;
+            numFusionReports = AP_BEACON_MAX_BEACONS;
         }
     }
     posOffsetNED.zero();
@@ -79,13 +78,18 @@ void NavEKF3_core::SelectRngBcnFusion()
     // Determine if we need to fuse range beacon data on this time step
     if (rngBcn.dataToFuse) {
         if (PV_AidingMode == AID_ABSOLUTE) {
-            if ((frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) && rngBcn.alignmentCompleted) {
+            // beacon positions relative to the EKF origin need no offset from the static alignment filter
+            if ((frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) &&
+                (rngBcn.alignmentCompleted || rngBcnUsesEkfOrigin())) {
                 if (!rngBcn.originEstInit) {
                     rngBcn.originEstInit = true;
                     if (rngBcnUsesEkfOrigin()) {
                         // beacon positions are relative to the public origin, which differs from the EKF
                         // origin only by the horizontal moves of the EKF origin while using GPS
                         rngBcn.posOffsetNED.xy() = public_origin.get_distance_NE_ftype(EKF_origin);
+                        // the static alignment may not have completed, so start the receiver from the EKF position
+                        rngBcn.receiverPos.xy() = stateStruct.position.xy() + rngBcn.posOffsetNED.xy();
+                        rngBcn.receiverPos.z = stateStruct.position.z;
                     } else {
                         rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
                         rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;

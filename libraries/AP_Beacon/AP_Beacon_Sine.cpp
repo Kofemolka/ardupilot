@@ -11,79 +11,14 @@
 
 extern const AP_HAL::HAL &hal;
 
-AP_Beacon_Sine::AP_Beacon_Sine(AP_Beacon &frontend)
-    : AP_Beacon_Backend(frontend)
-{
-  // Pre-register all beacons so num_beacons is non-zero when the DAL
-  // snapshots the count on the first EKF frame.  Real position and distance
-  // values are filled in once measurements arrive.
-  for (uint8_t i = 0; i < AP_BEACON_MAX_BEACONS; i++) {
-    set_beacon_position(i, Vector3f(10.0f, 10.0f, 0.0f));
-    set_beacon_distance(i, -1.0f);
-  }
-}
-
 bool AP_Beacon_Sine::healthy()
 {
   return (AP_HAL::millis() - last_update_ms) < 1000;
 }
 
-void AP_Beacon_Sine::update(void)
-{
-  if (!warmup_complete) {
-    warmup();
-    return;
-  }
-}
-
-void AP_Beacon_Sine::warmup()
-{
-  // EKF discards first 100 readings, then uses next 100 to estimate beacon origin.
-  // 500 readings at 40Hz (~12.5s) covers the EKF initialization window before flight.
-  if (warmup_readings >= 500) {
-    warmup_complete = true;
-    return;
-  }
-  
-  Location ekf_origin;
-  if (!AP::ahrs().get_origin(ekf_origin)) {
-    return;
-  }
-
-  Location ahrs_loc;
-  if (!AP::ahrs().get_location(ahrs_loc)) {
-    return;
-  }
-
-  if ((AP_HAL::millis() - last_update_ms) < 25) {
-    return;
-  }
-
-  last_update_ms = AP_HAL::millis();
-
-  static uint8_t fake_bcn_id = 0;
-
-  const Vector3f beacon_ned{10.0f, 0.0f, 0.0f};
-  const Vector3f vehicle_ned = ekf_origin.get_distance_NED(ahrs_loc);
-  const float dist = (beacon_ned - vehicle_ned).length();
-  set_beacon_position(fake_bcn_id, beacon_ned);
-  set_beacon_distance(fake_bcn_id, dist);
-
-  warmup_readings++;
-
-  fake_bcn_id++;
-  if (fake_bcn_id == AP_BEACON_MAX_BEACONS) {
-    fake_bcn_id = 0;
-  }
-}
-
 // handle mavlink message
 void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg)
 {
-  if (!warmup_complete) {
-    return;
-  }
-
   if (msg.msgid != MAVLINK_MSG_ID_RANGING_BEACON) {
     return;
   }
