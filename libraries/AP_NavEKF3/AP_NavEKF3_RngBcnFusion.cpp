@@ -59,6 +59,13 @@ void NavEKF3_core::BeaconFusion::InitialiseVariables()
     hdop = 0.0f;
 }
 
+// return true if the range beacon positions are relative to the EKF origin
+bool NavEKF3_core::rngBcnUsesEkfOrigin() const
+{
+    const auto *beacon = dal.beacon();
+    return beacon != nullptr && beacon->origin_type_ekf();
+}
+
 /********************************************************
 *                   FUSE MEASURED_DATA                  *
 ********************************************************/
@@ -75,8 +82,14 @@ void NavEKF3_core::SelectRngBcnFusion()
             if ((frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::BEACON) && rngBcn.alignmentCompleted) {
                 if (!rngBcn.originEstInit) {
                     rngBcn.originEstInit = true;
-                    rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
-                    rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
+                    if (rngBcnUsesEkfOrigin()) {
+                        // beacon positions are relative to the public origin, which differs from the EKF
+                        // origin only by the horizontal moves of the EKF origin while using GPS
+                        rngBcn.posOffsetNED.xy() = public_origin.get_distance_NE_ftype(EKF_origin);
+                    } else {
+                        rngBcn.posOffsetNED.x = rngBcn.receiverPos.x - stateStruct.position.x;
+                        rngBcn.posOffsetNED.y = rngBcn.receiverPos.y - stateStruct.position.y;
+                    }
                 }
                 // beacons are used as the primary means of position reference
                 FuseRngBcn();
@@ -139,7 +152,7 @@ void NavEKF3_core::FuseRngBcn()
     // health is set bad until test passed
     rngBcn.health = false;
 
-    if (activeHgtSource != AP_NavEKF_Source::SourceZ::BEACON) {
+    if (activeHgtSource != AP_NavEKF_Source::SourceZ::BEACON && !rngBcnUsesEkfOrigin()) {
         // calculate the vertical offset from EKF datum to beacon datum
         CalcRangeBeaconPosDownOffset(R_BCN, stateStruct.position, false);
     } else {
@@ -367,8 +380,10 @@ void NavEKF3_core::FuseRngBcnStatic()
 
         }
 
+        const bool estimateDownOffset = activeHgtSource != AP_NavEKF_Source::SourceZ::BEACON &&
+                                        !rngBcnUsesEkfOrigin();
         if (rngBcn.alignmentCompleted) {
-            if (activeHgtSource != AP_NavEKF_Source::SourceZ::BEACON) {
+            if (estimateDownOffset) {
                 // We are using a different height reference for the main EKF so need to estimate a vertical
                 // position offset to be applied to the beacon system that minimises the range innovations
                 // The position estimate should be stable after 100 iterations so we use a simple dual
@@ -380,12 +395,13 @@ void NavEKF3_core::FuseRngBcnStatic()
                 CalcRangeBeaconPosDownOffset(R_RNG, refPosNED, true);
 
             } else {
-                // we are using the beacons as the primary height source, so don't modify their vertical position
+                // we are using the beacons as the primary height source, or they are relative to the EKF origin,
+                // so don't modify their vertical position
                 rngBcn.posOffsetNED.z = 0.0f;
 
             }
         } else {
-            if (activeHgtSource != AP_NavEKF_Source::SourceZ::BEACON) {
+            if (estimateDownOffset) {
                 // The position estimate is not yet stable so we cannot run the 1-state EKF to estimate
                 // beacon system vertical position offset. Instead we initialise the dual hypothesis offset states
                 // using the beacon vertical position, vertical position estimate relative to the beacon origin
@@ -411,7 +427,8 @@ void NavEKF3_core::FuseRngBcnStatic()
                 rngBcn.posDownOffsetMax = stateStruct.position.z - receiverPosDownMin;
                 rngBcn.posDownOffsetMin = stateStruct.position.z - receiverPosDownMax;
             } else {
-                // We are using the beacons as the primary height reference, so don't modify their vertical position
+                // We are using the beacons as the primary height reference, or they are relative to the EKF origin,
+                // so don't modify their vertical position
                 rngBcn.posOffsetNED.z = 0.0f;
             }
         }
