@@ -739,6 +739,8 @@ bool NavEKF3_core::CalcRngBcnHdop(const rng_bcn_elements *samples, uint8_t n)
 
 // 2-D gradient-descent MLAT solver seeded from rngBcn.receiverPos.
 // Altitude is left unchanged — handled separately by posOffsetNED.z.
+// Measured ranges are slant ranges, so each one is reduced to its horizontal
+// component using the vertical separation between the beacon and the receiver.
 Vector2F NavEKF3_core::SolveMlat(const rng_bcn_elements *samples, uint8_t n, ftype& residualSq)
 {
     static constexpr ftype   MLAT_LEARNING_RATE      = 0.1f;
@@ -746,6 +748,15 @@ Vector2F NavEKF3_core::SolveMlat(const rng_bcn_elements *samples, uint8_t n, fty
     static constexpr uint8_t MLAT_MAX_ITER           = 30;
 
     ftype sx = rngBcn.receiverPos.x, sy = rngBcn.receiverPos.y;
+
+    // receiver height in the beacon frame; posOffsetNED.z converts beacon frame to EKF frame
+    const ftype receiverD = stateStruct.position.z - rngBcn.posOffsetNED.z;
+
+    // horizontal range to each beacon
+    ftype hRng[AP_BEACON_MAX_BEACONS];
+    for (uint8_t i = 0; i < n; i++) {
+        hRng[i] = sqrtF(MAX(sq(samples[i].rng) - sq(samples[i].beacon_posNED.z - receiverD), 0.0f));
+    }
 
     for (uint8_t iter = 0; iter < MLAT_MAX_ITER; iter++) {
         ftype gx = 0.0f, gy = 0.0f;
@@ -759,7 +770,7 @@ Vector2F NavEKF3_core::SolveMlat(const rng_bcn_elements *samples, uint8_t n, fty
             if (dist < 0.1f) {
                 continue;
             }
-            const ftype err  = dist - samples[i].rng;
+            const ftype err  = dist - hRng[i];
             const ftype err2 = 2.0f * err;
             gx += err2 * dx / dist;
             gy += err2 * dy / dist;

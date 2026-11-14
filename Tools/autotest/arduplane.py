@@ -4212,6 +4212,13 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
     def BeaconFusionRecovery(self):
         '''MLAT recovery fires when RANGE-mode innovations consistently exceed the gate'''
+        self.beacon_fusion_recovery(alt=50)
+
+    def BeaconFusionRecoveryAltDiff(self):
+        '''MLAT recovery compensates slant ranges for the altitude difference between vehicle and beacons'''
+        self.beacon_fusion_recovery(alt=50, beacon_alt_offset=-3000, check_reset=True, extra_params={"BCN_ORG_TYPE": 1})
+
+    def beacon_fusion_recovery(self, alt, beacon_alt_offset=0, check_reset=False, extra_params=None):
         SRC_GPS = 1
         SRC_IMU = 2
         SRC_BCN = 3
@@ -4221,10 +4228,10 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         home = SITL_START_LOCATION
         spread = 0.005
         beacons = [
-            (home.lat + spread, home.lng - spread, home.alt),
-            (home.lat + spread, home.lng + spread, home.alt),
-            (home.lat - spread, home.lng - spread, home.alt),
-            (home.lat - spread, home.lng + spread, home.alt),
+            (home.lat + spread, home.lng - spread, home.alt + beacon_alt_offset),
+            (home.lat + spread, home.lng + spread, home.alt + beacon_alt_offset),
+            (home.lat - spread, home.lng - spread, home.alt + beacon_alt_offset),
+            (home.lat - spread, home.lng + spread, home.alt + beacon_alt_offset),
         ]
         self.context_push()
         try:
@@ -4263,6 +4270,8 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
                 "GPS1_TYPE": 1,
             })
+            if extra_params is not None:
+                self.set_parameters(extra_params)
             self.reboot_sitl()
 
             # Range noise matches BCN_M_NSE so individual measurements are borderline.
@@ -4278,8 +4287,8 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.run_cmd(mavutil.mavlink.MAV_CMD_SET_EKF_SOURCE_SET, p1=SRC_GPS)
 
             self.start_flying_simple_relhome_mission([
-                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 50),
-                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 5000, 0, 50),
+                (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, alt),
+                (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 5000, 0, alt),
                 (mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH, 0, 0, 0),
             ])
 
@@ -4312,6 +4321,16 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
             self.wait_statustext("MLAT reset", timeout=60)
             self.progress("MLAT recovery triggered as expected")
+
+            if check_reset:
+                # the reset position is the MLAT solution; check it before range fusion can pull it in
+                self.delay_sim_time(1, reason="Let the reset reach the EKF output")
+                divergence = self.get_distance(self.get_mav_location(), self.sim_location())
+                self.progress("EKF-to-SITL divergence at MLAT reset: %.1fm" % divergence)
+                if divergence > POS_TOLERANCE:
+                    raise NotAchievedException(
+                        "Expected MLAT reset near SITL truth, %.1fm off" % divergence
+                    )
 
             self.delay_sim_time(5, reason="Wait for position to converge")
 
@@ -9022,6 +9041,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.EKFMovingOriginLockOnSourceSwitch,
             self.EKFBeaconPositionOffsetFusion,
             self.BeaconFusionRecovery,
+            self.BeaconFusionRecoveryAltDiff,
             self.BeaconWindEstimation,
             self.BeaconReceiverAltNearBeacon,
             self.BeaconEkfOriginEarlySwitch,
