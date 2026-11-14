@@ -4397,7 +4397,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         altitude relative to the beacons is offset by the vehicle height from the EKF
         altitude.  A beacon then appears on the ground close to the vehicle: its range
         is mostly vertical, so every measurement from it fails the innovation check.
-        With BCN_ORG_TYPE EKF AP_Beacon_Sine reports beacon positions relative to the
+        With BCN_ORG_TYPE EKF AP_Beacon_MAVLink reports beacon positions relative to the
         EKF origin, no offset is applied and the nearby beacon must be fused.'''
         SRC_BCN = 2
         BCN_ORG_TYPE_EKF = 1

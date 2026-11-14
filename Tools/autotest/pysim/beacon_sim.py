@@ -1,5 +1,5 @@
 '''
-MAVLink RANGING_BEACON simulator for AP_Beacon_Sine (BCN_TYPE=4).
+MAVLink RANGING_BEACON simulator for AP_Beacon_MAVlink (BCN_TYPE=4).
 
 AP_FLAKE8_CLEAN
 '''
@@ -11,8 +11,8 @@ import struct
 from pymavlink import mavutil
 from pymavlink.dialects.v20.ardupilotmega import MAVLink_message as _MAVLink_message
 
-_MAV_COMP_ID_USER66 = 90        # AP_Beacon_Sine filter requires this component ID
 _BEACON_SIM_SYSID = 200         # source system ID used in outgoing packets
+_BEACON_SIM_COMPID = 200        # source component ID used in outgoing packets
 
 
 # RANGING_BEACON (msg ID 513, crc_extra 99) is a custom ArduPilot extension that is not
@@ -89,7 +89,7 @@ class MAVLink_ranging_beacon_message(_MAVLink_message):
 
 
 class SITLBeaconSimulator:
-    '''Simulate RANGING_BEACON MAVLink messages for AP_Beacon_Sine (BCN_TYPE=4).
+    '''Simulate RANGING_BEACON MAVLink messages for AP_Beacon_MAVlink (BCN_TYPE=4).
 
     Install as a message hook via suite.install_message_hook_context(sim).
     Fires on every received MAVLink message but uses sim-time rate limiting so
@@ -202,7 +202,7 @@ class SITLBeaconSimulator:
         msg = MAVLink_ranging_beacon_message(
             0,                                    # time_usec
             1,                                    # target_system
-            _MAV_COMP_ID_USER66,                  # target_component
+            1,                                    # target_component
             beacon_id,                            # beacon_id
             min(int(range_m * 1000), 0xFFFFFFFF), # range (mm), clamped to uint32
             int(blat * 1e7),                      # lat (degE7)
@@ -225,7 +225,7 @@ class SITLBeaconSimulator:
         old_comp = mav_proto.srcComponent
         try:
             mav_proto.srcSystem    = _BEACON_SIM_SYSID
-            mav_proto.srcComponent = _MAV_COMP_ID_USER66
+            mav_proto.srcComponent = _BEACON_SIM_COMPID
             self._suite.mav.write(msg.pack(mav_proto))
         finally:
             mav_proto.srcSystem    = old_sys

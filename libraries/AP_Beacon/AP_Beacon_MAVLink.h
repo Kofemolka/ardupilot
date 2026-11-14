@@ -2,9 +2,9 @@
 
 #include "AP_Beacon_Backend.h"
 
-#if AP_BEACON_SINE_ENABLED
+#if AP_BEACON_MAVLINK_ENABLED
 
-class AP_Beacon_Sine : public AP_Beacon_Backend {
+class AP_Beacon_MAVLink : public AP_Beacon_Backend {
 public:
   using AP_Beacon_Backend::AP_Beacon_Backend;
 
@@ -18,4 +18,4 @@ private:
   uint32_t last_update_ms;
 };
 
-#endif // AP_BEACON_SINE_ENABLED
+#endif // AP_BEACON_MAVLINK_ENABLED

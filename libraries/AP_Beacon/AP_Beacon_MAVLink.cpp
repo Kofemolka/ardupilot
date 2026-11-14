@@ -1,8 +1,8 @@
 #include "AP_Beacon_config.h"
 
-#if AP_BEACON_SINE_ENABLED
+#if AP_BEACON_MAVLINK_ENABLED
 
-#include "AP_Beacon_Sine.h"
+#include "AP_Beacon_MAVLink.h"
 
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_Common/Location.h>
@@ -11,13 +11,13 @@
 
 extern const AP_HAL::HAL &hal;
 
-bool AP_Beacon_Sine::healthy()
+bool AP_Beacon_MAVLink::healthy()
 {
   return (AP_HAL::millis() - last_update_ms) < 1000;
 }
 
 // handle mavlink message
-void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg)
+void AP_Beacon_MAVLink::handle_msg(const mavlink_message_t &msg)
 {
   if (msg.msgid != MAVLINK_MSG_ID_RANGING_BEACON) {
     return;
@@ -26,13 +26,6 @@ void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg)
   mavlink_ranging_beacon_t bcn_range;
   mavlink_msg_ranging_beacon_decode(&msg, &bcn_range);
 
-  // MAV_COMP_ID_USER66 is agreed upon with the Sine ranging firmware
-  // as the component ID that identifies RANGING_BEACON messages from
-  // Sine beacons, distinguishing them from other beacon systems.
-  if (bcn_range.target_component != MAV_COMP_ID_USER66) {
-    return;
-  }
-
   if (!handle_range_msg(bcn_range)) {
     return;
   }
@@ -40,7 +33,7 @@ void AP_Beacon_Sine::handle_msg(const mavlink_message_t &msg)
   last_update_ms = AP_HAL::millis();
 }
 
-bool AP_Beacon_Sine::handle_range_msg(const mavlink_ranging_beacon_t& bcn_range)
+bool AP_Beacon_MAVLink::handle_range_msg(const mavlink_ranging_beacon_t& bcn_range)
 {
   if (bcn_range.beacon_id >= AP_BEACON_MAX_BEACONS) {
     return false;
@@ -67,4 +60,4 @@ bool AP_Beacon_Sine::handle_range_msg(const mavlink_ranging_beacon_t& bcn_range)
   return true;
 }
 
-#endif // AP_BEACON_SINE_ENABLED
+#endif // AP_BEACON_MAVLINK_ENABLED
