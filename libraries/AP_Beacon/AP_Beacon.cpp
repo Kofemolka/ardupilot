@@ -21,7 +21,7 @@
 #include "AP_Beacon_Pozyx.h"
 #include "AP_Beacon_Marvelmind.h"
 #include "AP_Beacon_Nooploop.h"
-#include "AP_Beacon_Sine.h"
+#include "AP_Beacon_MAVLink.h"
 #include "AP_Beacon_SITL.h"
 
 #include <AP_Common/Location.h>
@@ -79,6 +79,13 @@ const AP_Param::GroupInfo AP_Beacon::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_ORIENT_YAW", 4, AP_Beacon, orient_yaw, 0),
 
+    // @Param: _ORG_TYPE
+    // @DisplayName: Beacon positions origin type
+    // @Description: Origin that the beacon positions are relative to. Own: the origin set by BCN_LATITUDE, BCN_LONGITUDE and BCN_ALT, and the EKF estimates the offset between the beacon and EKF frames. EKF: the EKF origin, so the EKF applies no estimated offset between the beacon and EKF frames.
+    // @Values: 0:Own,1:EKF
+    // @User: Advanced
+    AP_GROUPINFO("_ORG_TYPE", 5, AP_Beacon, _origin_type, float(OriginType::Own)),
+
     AP_GROUPEND
 };
 
@@ -112,8 +119,8 @@ void AP_Beacon::init(void)
     case Type::Nooploop:
         _driver = NEW_NOTHROW AP_Beacon_Nooploop(*this);
         break;
-    case Type::Sine:
-        _driver = NEW_NOTHROW AP_Beacon_Sine(*this);
+    case Type::MAVlink:
+        _driver = NEW_NOTHROW AP_Beacon_MAVLink(*this);
         break;
 #if AP_BEACON_SITL_ENABLED
     case Type::SITL:

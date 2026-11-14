@@ -1,5 +1,5 @@
 '''
-MAVLink RANGING_BEACON simulator for AP_Beacon_Sine (BCN_TYPE=4).
+MAVLink RANGING_BEACON simulator for AP_Beacon_MAVlink (BCN_TYPE=4).
 
 AP_FLAKE8_CLEAN
 '''
@@ -11,8 +11,8 @@ import struct
 from pymavlink import mavutil
 from pymavlink.dialects.v20.ardupilotmega import MAVLink_message as _MAVLink_message
 
-_MAV_COMP_ID_USER66 = 90        # AP_Beacon_Sine filter requires this component ID
 _BEACON_SIM_SYSID = 200         # source system ID used in outgoing packets
+_BEACON_SIM_COMPID = 200        # source component ID used in outgoing packets
 
 
 # RANGING_BEACON (msg ID 513, crc_extra 99) is a custom ArduPilot extension that is not
@@ -89,7 +89,7 @@ class MAVLink_ranging_beacon_message(_MAVLink_message):
 
 
 class SITLBeaconSimulator:
-    '''Simulate RANGING_BEACON MAVLink messages for AP_Beacon_Sine (BCN_TYPE=4).
+    '''Simulate RANGING_BEACON MAVLink messages for AP_Beacon_MAVlink (BCN_TYPE=4).
 
     Install as a message hook via suite.install_message_hook_context(sim).
     Fires on every received MAVLink message but uses sim-time rate limiting so
@@ -101,23 +101,51 @@ class SITLBeaconSimulator:
 
     suite:         TestSuite instance (provides get_distance(), get_sim_time_cached(),
                    and mav.write())
-    beacons:       list of up to 4 (lat_deg, lon_deg, alt_m_MSL) tuples
+    beacons:       list of (lat_deg, lon_deg, alt_m_MSL) tuples, one per physical beacon;
+                   may be longer than num_slots
     noise_sigma_m: 1-sigma Gaussian range noise added to each measurement (metres)
+    range_bias_m:  optional list with a constant range error (metres) per beacon,
+                   e.g. to model multipath or beacon position errors
+    alt_offset_m:  offset added to the reported beacon altitude (metres); ranges
+                   still use the true altitude, so this models a beacon system
+                   whose vertical datum differs from the EKF one
     rate_hz:       full cycle rate in simulation Hz — total messages per second is
-                   rate_hz * len(beacons), evenly spaced in round-robin order.
-                   Example: 4 beacons at 2 Hz → 8 messages/s, one every 125 ms.
+                   rate_hz * active slots, evenly spaced in round-robin order.
+                   Example: 4 slots at 2 Hz → 8 messages/s, one every 125 ms.
+    num_slots:     number of beacon IDs (slots) reported to the autopilot. Must not
+                   exceed AP_BEACON_MAX_BEACONS of the firmware, which drops higher IDs.
+    rotation_s:    when there are more beacons than slots, every rotation_s seconds
+                   a new random set of beacons is picked and assigned to the slots,
+                   each beacon to at most one slot.  With no more beacons than slots
+                   each beacon keeps its own slot.
+    seed:          optional seed for the beacon selection and range noise
     '''
 
-    def __init__(self, suite, beacons, noise_sigma_m=0.5, rate_hz=10.0):
-        if len(beacons) > 4:
-            raise ValueError("AP_Beacon supports at most 4 beacons (AP_BEACON_MAX_BEACONS=4)")
+    def __init__(self, suite, beacons, noise_sigma_m=0.5, rate_hz=10.0, range_bias_m=None, alt_offset_m=0.0,
+                 num_slots=5, rotation_s=10.0, seed=None):
+        if num_slots < 1:
+            raise ValueError("num_slots must be at least 1")
         self._suite = suite
         self._beacons = list(beacons)
+        self._num_slots = num_slots
+        self._rotation_s = rotation_s
+        self._random = random.Random(seed)
+        self._slots = list(range(min(num_slots, len(self._beacons))))   # slot -> beacon index
+        self._next_rotation_time = None
         self._noise_sigma_m = noise_sigma_m
         self._rate_hz = rate_hz
+        self._range_bias_m = list(range_bias_m) if range_bias_m is not None else [0.0] * len(self._beacons)
+        self._alt_offset_m = alt_offset_m
         self._seq = 0
         self._next_beacon = 0          # round-robin index
         self._next_send_time = None    # sim-time of next scheduled send (set on first call)
+
+    def set_beacon(self, index, beacon, range_bias_m=None):
+        '''Move physical beacon index to beacon (lat_deg, lon_deg, alt_m_MSL),
+        optionally changing its constant range error.'''
+        self._beacons[index] = beacon
+        if range_bias_m is not None:
+            self._range_bias_m[index] = range_bias_m
 
     def __call__(self, mav, msg):
         '''Message hook entry point — called for every received MAVLink message.'''
@@ -126,10 +154,15 @@ class SITLBeaconSimulator:
         # Initialise schedule on the very first call
         if self._next_send_time is None:
             self._next_send_time = sim_now
+            self._next_rotation_time = sim_now
             return
 
         if sim_now < self._next_send_time:
             return
+
+        if len(self._beacons) > self._num_slots and sim_now >= self._next_rotation_time:
+            self._slots = self._random.sample(range(len(self._beacons)), self._num_slots)
+            self._next_rotation_time = max(self._next_rotation_time + self._rotation_s, sim_now)
 
         # Read physical SITL truth from pymavlink's message cache.
         # mav.messages is populated before hooks are called so this is safe to
@@ -145,30 +178,31 @@ class SITLBeaconSimulator:
         veh_alt = gpi.alt * 1e-3 if gpi is not None else 0.0  # mm → m MSL
         veh_loc = mavutil.location(veh_lat, veh_lng, veh_alt, 0)
 
-        # Send the next beacon in round-robin order
-        i = self._next_beacon
+        # Send the next slot in round-robin order
+        slot = self._next_beacon
+        i = self._slots[slot]
         blat, blon, balt = self._beacons[i]
 
         bcn_loc = mavutil.location(blat, blon, balt, 0)
         h = self._suite.get_distance(veh_loc, bcn_loc)   # horizontal (m)
         v = veh_alt - balt                                 # vertical (m)
-        range_m = math.sqrt(h * h + v * v)
+        range_m = math.sqrt(h * h + v * v) + self._range_bias_m[i]
         if self._noise_sigma_m > 0:
-            range_m += random.gauss(0, self._noise_sigma_m)
+            range_m += self._random.gauss(0, self._noise_sigma_m)
         range_m = max(0.1, range_m)
 
         self._seq = (self._seq + 1) & 0xFF
-        self._send(i, range_m, blat, blon, balt)
+        self._send(slot, range_m, blat, blon, balt + self._alt_offset_m)
 
         # Advance round-robin and schedule the next send
-        self._next_beacon = (i + 1) % len(self._beacons)
-        self._next_send_time += 1.0 / (self._rate_hz * len(self._beacons))
+        self._next_beacon = (slot + 1) % len(self._slots)
+        self._next_send_time += 1.0 / (self._rate_hz * len(self._slots))
 
     def _send(self, beacon_id, range_m, blat, blon, balt):
         msg = MAVLink_ranging_beacon_message(
             0,                                    # time_usec
             1,                                    # target_system
-            _MAV_COMP_ID_USER66,                  # target_component
+            1,                                    # target_component
             beacon_id,                            # beacon_id
             min(int(range_m * 1000), 0xFFFFFFFF), # range (mm), clamped to uint32
             int(blat * 1e7),                      # lat (degE7)
@@ -191,7 +225,7 @@ class SITLBeaconSimulator:
         old_comp = mav_proto.srcComponent
         try:
             mav_proto.srcSystem    = _BEACON_SIM_SYSID
-            mav_proto.srcComponent = _MAV_COMP_ID_USER66
+            mav_proto.srcComponent = _BEACON_SIM_COMPID
             self._suite.mav.write(msg.pack(mav_proto))
         finally:
             mav_proto.srcSystem    = old_sys
